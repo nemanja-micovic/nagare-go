@@ -194,7 +194,19 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
+	// Detached helper started by message delivery: pastes queued messages into
+	// a pane once its agent goes idle. Not for users.
+	deliverWatchCmd := &cobra.Command{
+		Use:    "deliver-watch <pane-id>",
+		Short:  "Deliver queued messages to a pane once its agent is idle",
+		Args:   cobra.ExactArgs(1),
+		Hidden: true,
+		Run: func(cmd *cobra.Command, args []string) {
+			mcp.WatchPane(args[0])
+		},
+	}
+
+	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd, deliverWatchCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

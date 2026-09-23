@@ -27,6 +27,7 @@ nagare-go new [path]       # create new agent session
 nagare-go new <repo> -w <name>  # create a named git worktree and start an agent in it
 nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
+nagare-go deliver-watch <pane> # paste queued messages once the pane is idle (hidden; spawned by delivery)
 ```
 
 ## Architecture
@@ -141,6 +142,48 @@ belong in `internal/setup`, not in the installed files.
 
 Codex requires newly installed command hooks to be reviewed once with `/hooks`.
 Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
+
+### Message delivery: push, never poll
+
+Messaging used to work like email: the sender called `list_agents`, then `send_message`,
+which refused unless the target was idle and typed "call check_messages()" into its pane;
+the recipient then spent a whole turn fetching the message, and a waiting sender polled
+every 2s. Each of those steps is a model round trip. Now a message reaches the
+recipient's context in one step, and so does the answer:
+
+- **No discovery call.** `resolveSession` accepts a session, repo, worktree, directory,
+  or agent type (`codex`), tiered strictest-first. A miss returns the live roster, so a
+  wrong guess costs one retry, not a `list_agents` call. The MCP server `instructions`
+  carry a startup roster and tell the agent not to call `list_agents` first.
+- **The content is delivered, not a pointer to it.** `mcp.deliver` picks a path per
+  message. If a live in-process listener owns the pane (the pi extension, the OpenCode
+  plugin), it goes to `push/<pane>/` and the listener injects it natively. If the pane
+  is idle, it is bracketed-pasted in as the next prompt. Otherwise it is queued in
+  `push/<pane>/`. A pane showing a permission prompt is never typed into, because the
+  keystrokes would answer the prompt.
+- **Busy agents take messages mid-turn.** `hook-state` drains `push/$TMUX_PANE` on
+  `PostToolUse` and `UserPromptSubmit`, returning it as `additionalContext`. On `Stop` it
+  returns `{"decision":"block","reason":…}`, which both Claude Code and Codex continue
+  from — so a Stop that delivers keeps the state `working`. `PreToolUse` cannot carry
+  context, so it never drains.
+- **pi** gets messages through `pi.sendUserMessage`, with `deliverAs: "steer"` while
+  it is busy. **OpenCode** gets them through `client.session.promptAsync` on the
+  top-level session; subagent sessions (those with a `parentID`) are skipped, and the
+  TUI prompt is the fallback.
+- **Fallback.** A detached `nagare-go deliver-watch <pane>` pastes whatever is still
+  queued once the pane has been idle for two checks. This covers agents without such
+  hooks (Gemini, OhMyPi, Crush) and status that went stale. It runs at most once per
+  pane (pid lock) and exits when the queue is empty.
+- **Replies are pushed back** as a new message carrying `in_reply_to`, which can itself
+  be replied to, so two agents can hold a conversation without either polling. A sender
+  blocked in `send_message_and_wait` leaves a `msg_<id>.wait` marker. The answer is
+  then collected by the waiter, polling every 100ms, instead of being pushed.
+
+A push is claimed by `rename`, so exactly one consumer delivers it however many race.
+Replies look messages up by id across all inboxes (`FindMessage`), because a display
+name — and so the inbox it maps to — changes when tmux renames a window. Codex filters
+MCP server environments, so setup forwards `TMUX_PANE`/`TMUX` with `env_vars`. It also
+raises `tool_timeout_sec`, because Codex's 60s default would cut waits short.
 
 ## Picker Keybindings
 

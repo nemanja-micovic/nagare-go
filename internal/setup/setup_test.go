@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -317,6 +318,51 @@ func TestInstallOpenCodePlugin(t *testing.T) {
 			t.Errorf("forwarded event %q is not mapped by EventToState", event)
 		}
 	}
+	// The plugin is the pane's message listener.
+	for _, want := range []string{"promptAsync", `join(DATA, "push", PANE)`, "renameSync", `agent: "opencode"`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("plugin missing message listener piece %q", want)
+		}
+	}
+}
+
+func TestPiExtensionListensForMessages(t *testing.T) {
+	home := t.TempDir()
+	if err := installPiExtension(home, "/opt/bin/nagare-go"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "extensions", "nagare.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	// Busy pi must get messages as steering, or they wait for the turn to end.
+	for _, want := range []string{"sendUserMessage", `deliverAs: "steer"`, "isIdle()", `join(DATA, "push", PANE)`, `agent: "pi"`} {
+		if !strings.Contains(content, want) {
+			t.Errorf("extension missing %q", want)
+		}
+	}
+	if strings.Contains(content, "__DESC_") {
+		t.Error("tool description placeholder left unfilled")
+	}
+	// pi tools must carry the MCP server's wording, not a stale copy.
+	if !strings.Contains(content, strconv.Quote(mcp.ToolDescription("send_message"))) {
+		t.Error("send_message description differs from the MCP server's")
+	}
+}
+
+func TestHooksDeliverMessagesMidTurn(t *testing.T) {
+	for name, events := range map[string][]string{"Claude Code": hookEvents, "Codex": codexHookEvents} {
+		found := false
+		for _, e := range events {
+			if e == "PostToolUse" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s hooks lack PostToolUse, so messages wait for the turn to end", name)
+		}
+	}
 }
 
 // OpenCode reads ~/.config/opencode/opencode.json; config.json is the old name
@@ -419,7 +465,12 @@ args = ["mcp"]
 		t.Fatal(err)
 	}
 	content := string(data)
-	for _, want := range []string{"# keep this comment", `model = "test-model"`, "[mcp_servers.other]", `command = "/opt/bin/nagare-go"`} {
+	for _, want := range []string{"# keep this comment", `model = "test-model"`, "[mcp_servers.other]", `command = "/opt/bin/nagare-go"`,
+		// Codex filters MCP server environments; without the pane id nagare
+		// cannot tell which agent is sending.
+		`env_vars = ["TMUX_PANE", "TMUX"]`,
+		// The 60s default would cut send_message_and_wait short.
+		"tool_timeout_sec = 900"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("Codex config missing %q:\n%s", want, content)
 		}

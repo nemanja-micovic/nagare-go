@@ -15,7 +15,15 @@ import (
 //
 // Only the events nagare acts on are forwarded — the bus is chatty, and every
 // forwarded event costs a process spawn.
+//
+// The plugin is also the pane's message listener: it watches the pane's push
+// directory and hands each message from another agent to the session through
+// the SDK client, so it arrives without anyone typing into the pane.
 const opencodePluginTemplate = `// Installed by "nagare-go setup". Regenerated on every run — edit nagare instead.
+import { mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, watch, writeFileSync } from "node:fs"
+import { homedir } from "node:os"
+import { join } from "node:path"
+
 const NAGARE = %q
 
 const REPORTED = new Set([
@@ -27,7 +35,40 @@ const REPORTED = new Set([
   "permission.replied",
 ])
 
-export const NagarePlugin = async ({ $, directory, worktree }) => {
+// Messages from other agents. nagare queues each one as a file under
+// push/<pane>/; claiming it by rename means exactly one consumer delivers it.
+const PANE = (process.env.TMUX_PANE ?? "").replace(/^%%/, "")
+const DATA = join(homedir(), ".local", "share", "nagare")
+const PUSH_DIR = join(DATA, "push", PANE)
+const LISTENER = join(DATA, "listeners", PANE + ".json")
+
+function takePushes() {
+  let names
+  try {
+    names = readdirSync(PUSH_DIR).filter((n) => n.endsWith(".json")).sort()
+  } catch {
+    return []
+  }
+  const texts = []
+  for (const name of names) {
+    const claimed = join(PUSH_DIR, name + ".taken")
+    try {
+      renameSync(join(PUSH_DIR, name), claimed)
+    } catch {
+      continue // claimed by another consumer
+    }
+    try {
+      const text = JSON.parse(readFileSync(claimed, "utf8")).text
+      if (text) texts.push(text)
+    } catch {}
+    try {
+      unlinkSync(claimed)
+    } catch {}
+  }
+  return texts
+}
+
+export const NagarePlugin = async ({ $, client, directory, worktree }) => {
   const report = async (type) => {
     const payload = JSON.stringify({
       hook_event_name: type,
@@ -41,8 +82,67 @@ export const NagarePlugin = async ({ $, directory, worktree }) => {
     }
   }
 
+  // The top-level session the user is working in. Subagent sessions carry a
+  // parentID and are never the one a message is meant for.
+  let sessionID
+  const children = new Set()
+  const track = (event) => {
+    const p = event.properties ?? {}
+    const info = p.info ?? {}
+    if (event.type === "session.created" || event.type === "session.updated") {
+      if (info.parentID) children.add(info.id)
+      else if (info.id) sessionID = info.id
+      return
+    }
+    const id = p.sessionID ?? info.sessionID
+    if (id && !children.has(id)) sessionID = id
+  }
+
+  // A prompt sent to a busy session is queued by OpenCode and picked up by
+  // the loop already running, so one path serves idle and busy alike.
+  const inject = async (text) => {
+    if (sessionID) {
+      try {
+        await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: "text", text }] } })
+        return
+      } catch {}
+    }
+    try {
+      await client.tui.appendPrompt({ body: { text } })
+      await client.tui.submitPrompt()
+    } catch {}
+  }
+
+  if (PANE) {
+    try {
+      mkdirSync(PUSH_DIR, { recursive: true })
+      mkdirSync(join(DATA, "listeners"), { recursive: true })
+      writeFileSync(LISTENER, JSON.stringify({ pid: process.pid, agent: "opencode" }))
+      let timer
+      const deliver = () => {
+        timer = undefined
+        const texts = takePushes()
+        if (texts.length > 0) inject(texts.join("\n\n---\n\n"))
+      }
+      // Coalesce the burst of events one atomic write produces.
+      const schedule = () => {
+        if (!timer) timer = setTimeout(deliver, 20)
+      }
+      watch(PUSH_DIR, schedule)
+      schedule() // anything queued before OpenCode started
+      process.once("exit", () => {
+        try {
+          unlinkSync(LISTENER)
+        } catch {}
+      })
+    } catch {
+      // Without a listener, nagare falls back to typing into the pane.
+    }
+  }
+
   return {
     event: async ({ event }) => {
+      track(event)
       if (REPORTED.has(event.type)) await report(event.type)
     },
   }

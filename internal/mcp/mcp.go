@@ -37,7 +37,9 @@ type Message struct {
 	Status       string  `json:"status"`   // "pending", "delivered", "completed"
 	Response     *string `json:"response"` // nil until reply
 	CreatedAt    string  `json:"created_at"`
-	RespondedAt  *string `json:"responded_at"` // nil until reply
+	RespondedAt  *string `json:"responded_at"`          // nil until reply
+	FromPane     string  `json:"from_pane,omitempty"`   // sender's tmux pane, for pushing the reply back
+	InReplyTo    string  `json:"in_reply_to,omitempty"` // set on a reply pushed back to the original sender
 }
 
 // MessagesDir returns the base messages directory.
@@ -60,6 +62,13 @@ func InboxDir(sessionName string) string {
 // MessagePath returns the file path for a message.
 func MessagePath(toSession, msgID string) string {
 	return filepath.Join(InboxDir(toSession), fmt.Sprintf("msg_%s.json", msgID))
+}
+
+// waitPath marks a message whose sender is blocked in send_message_and_wait.
+// Its presence tells reply() the answer will be collected, so it need not be
+// pushed back as a separate message.
+func waitPath(toSession, msgID string) string {
+	return filepath.Join(InboxDir(toSession), fmt.Sprintf("msg_%s.wait", msgID))
 }
 
 // WriteMessage writes a message to the target's inbox.
@@ -86,6 +95,30 @@ func ReadMessage(toSession, msgID string) (Message, error) {
 		return Message{}, err
 	}
 	return msg, nil
+}
+
+// FindMessage locates a message by id in any inbox. Ids are unique, and a
+// lookup by id survives a display-name change — tmux renaming a window, or a
+// second agent joining the session — which moves the inbox a name maps to.
+func FindMessage(msgID string) (Message, error) {
+	dirs, err := os.ReadDir(MessagesDir())
+	if err != nil {
+		return Message{}, err
+	}
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(MessagesDir(), d.Name(), fmt.Sprintf("msg_%s.json", msgID)))
+		if err != nil {
+			continue
+		}
+		var msg Message
+		if err := json.Unmarshal(data, &msg); err == nil {
+			return msg, nil
+		}
+	}
+	return Message{}, os.ErrNotExist
 }
 
 // ListInbox reads all messages in a session's inbox.

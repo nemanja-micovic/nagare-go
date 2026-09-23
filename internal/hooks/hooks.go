@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nemke/nagare-go/internal/config"
+	"github.com/nemke/nagare-go/internal/mcp"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/notifications"
 	"github.com/nemke/nagare-go/internal/state"
@@ -85,6 +86,35 @@ func EventToState(event, notificationType string) string {
 	}
 }
 
+// DeliversMessages reports whether an event's hook response can carry text
+// into the agent's context. Claude Code and Codex share these event names and
+// the response shapes in DeliveryOutput.
+func DeliversMessages(event string) bool {
+	switch event {
+	case "Stop", "PostToolUse", "UserPromptSubmit", "SessionStart":
+		return true
+	}
+	return false
+}
+
+// DeliveryOutput is the hook response that hands text to the agent. Stop is
+// blocked with the messages as the reason, which both Claude Code and Codex
+// feed back to the model as the prompt to continue with; the other events
+// attach them as additional context.
+func DeliveryOutput(event, text string) []byte {
+	var out any
+	if event == "Stop" {
+		out = map[string]string{"decision": "block", "reason": text}
+	} else {
+		out = map[string]any{"hookSpecificOutput": map[string]string{
+			"hookEventName":     event,
+			"additionalContext": text,
+		}}
+	}
+	data, _ := json.Marshal(out)
+	return data
+}
+
 // ShouldNotify determines if a notification should fire.
 // Returns (eventType, workingSeconds). eventType is "" if no notification.
 // minWorkingSeconds is the threshold from config (typically 30).
@@ -121,6 +151,24 @@ func Handle() {
 	}
 
 	newState := EventToState(event.HookEventName, event.NotificationType)
+
+	// Messages queued for this pane ride out on the hook's own response. A
+	// Stop that delivers keeps the agent working, so it must not read as idle
+	// — or notify as a finished task.
+	paneID := os.Getenv("TMUX_PANE")
+	var delivery []byte
+	if DeliversMessages(event.HookEventName) && paneID != "" {
+		if pushes := mcp.Drain(paneID); len(pushes) > 0 {
+			delivery = DeliveryOutput(event.HookEventName, mcp.JoinPushes(pushes))
+			if event.HookEventName == "Stop" {
+				newState = "working"
+			}
+		}
+	}
+	if delivery != nil {
+		defer os.Stdout.Write(delivery)
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	statesDir := state.DefaultStatesDir()
 
@@ -132,7 +180,7 @@ func Handle() {
 		State:            newState,
 		SessionID:        event.SessionID,
 		Cwd:              event.Cwd,
-		PaneID:           os.Getenv("TMUX_PANE"),
+		PaneID:           paneID,
 		Event:            event.HookEventName,
 		NotificationType: event.NotificationType,
 		LastMessage:      event.LastAssistantMessage,

@@ -12,11 +12,13 @@ import (
 )
 
 // Claude Code hook events nagare subscribes to, with matcher="" (all).
-// PostToolUse is deliberately absent: it would double the process spawns per
-// turn without changing the state PreToolUse already reported.
+// PostToolUse adds a process spawn per tool call; it earns it as the point
+// where messages from other agents are delivered mid-turn, as additional
+// context, instead of waiting for the turn to end.
 var hookEvents = []string{
 	"UserPromptSubmit",
 	"PreToolUse",
+	"PostToolUse",
 	"PermissionRequest", // exact "needs approval" signal
 	"Elicitation",       // MCP server asking the user for input
 	"ElicitationResult", // input supplied, turn resumes
@@ -27,10 +29,12 @@ var hookEvents = []string{
 }
 
 // Codex exposes the same lifecycle event names and stdin JSON envelope as
-// Claude Code. These are the events needed for Nagare's four visible states.
+// Claude Code. These are the events needed for Nagare's four visible states,
+// plus PostToolUse, which delivers messages from other agents mid-turn.
 var codexHookEvents = []string{
 	"UserPromptSubmit",
 	"PermissionRequest",
+	"PostToolUse",
 	"Stop",
 	"SessionStart",
 	"SessionEnd",
@@ -159,7 +163,10 @@ func registerMCPCodex(configPath, nagareBin string) error {
 	}
 
 	base := strings.TrimSpace(strings.Join(kept, "\n"))
-	entry := fmt.Sprintf("[mcp_servers.nagare]\ncommand = %q\nargs = [\"mcp\"]", nagareBin)
+	// Codex hands stdio servers a filtered environment, so the pane id — how
+	// nagare knows which agent is calling — must be forwarded explicitly. Its
+	// default 60s tool timeout would also cut send_message_and_wait short.
+	entry := fmt.Sprintf("[mcp_servers.nagare]\ncommand = %q\nargs = [\"mcp\"]\nenv_vars = [\"TMUX_PANE\", \"TMUX\"]\ntool_timeout_sec = 900", nagareBin)
 	out := entry + "\n"
 	if base != "" {
 		out = base + "\n\n" + out

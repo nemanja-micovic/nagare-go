@@ -1,6 +1,9 @@
 package hooks
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestEventToState(t *testing.T) {
 	tests := []struct {
@@ -97,5 +100,39 @@ func TestShouldNotify_NeedsInputNotRepeated(t *testing.T) {
 	eventType, _ := ShouldNotify("waiting_input", "waiting_input", 0, 30)
 	if eventType != "" {
 		t.Errorf("expected empty on repeated waiting_input, got %q", eventType)
+	}
+}
+
+func TestDeliveryOutputShapes(t *testing.T) {
+	var stop map[string]string
+	if err := json.Unmarshal(DeliveryOutput("Stop", "hello"), &stop); err != nil {
+		t.Fatal(err)
+	}
+	// Claude Code and Codex both continue a blocked Stop with the reason as
+	// the next prompt; a blank reason is rejected by Codex.
+	if stop["decision"] != "block" || stop["reason"] != "hello" {
+		t.Errorf("Stop output = %v", stop)
+	}
+
+	for _, event := range []string{"PostToolUse", "UserPromptSubmit", "SessionStart"} {
+		var out struct {
+			HookSpecificOutput map[string]string `json:"hookSpecificOutput"`
+		}
+		if err := json.Unmarshal(DeliveryOutput(event, "hello"), &out); err != nil {
+			t.Fatal(err)
+		}
+		// hookEventName must match the event, or Codex rejects the output.
+		if out.HookSpecificOutput["hookEventName"] != event || out.HookSpecificOutput["additionalContext"] != "hello" {
+			t.Errorf("%s output = %v", event, out)
+		}
+	}
+}
+
+func TestOnlyContextCarryingEventsDeliver(t *testing.T) {
+	// PreToolUse cannot carry context; draining there would lose messages.
+	for _, event := range []string{"PreToolUse", "PermissionRequest", "SessionEnd", "agent_settled", "session.idle"} {
+		if DeliversMessages(event) {
+			t.Errorf("%s must not drain messages", event)
+		}
 	}
 }

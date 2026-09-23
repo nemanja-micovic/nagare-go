@@ -7,33 +7,6 @@ import (
 	"github.com/nemke/nagare-go/internal/models"
 )
 
-// TestSendMessage tests sending a message to react session
-func TestSendMessage(t *testing.T) {
-	// Test send_message to react session
-	input := SendMessageInput{
-		Target:  "react",
-		Message: "hi",
-	}
-
-	result := SendMessageHandler("nagare-go", input)
-	t.Logf("Result: %s", result)
-
-	// The result should indicate success or error
-	if result == "" {
-		t.Error("Expected a result from SendMessageHandler")
-	}
-}
-
-// TestListAgents tests listing all agents
-func TestListAgents(t *testing.T) {
-	result := ListAgentsHandler("nagare-go")
-	t.Logf("Agents: %s", result)
-
-	if result == "" {
-		t.Error("Expected agent list")
-	}
-}
-
 func TestResolveSessionExact(t *testing.T) {
 	sessions := []models.Session{
 		{Name: "cosmo-ai"},
@@ -80,6 +53,42 @@ func TestResolveSessionNotFound(t *testing.T) {
 	_, err := resolveSession("nope", []models.Session{{Name: "other"}})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("expected not-found error, got %v", err)
+	}
+}
+
+func TestResolveSessionLooseNames(t *testing.T) {
+	sessions := []models.Session{
+		{Name: "cosmo-ai", AgentType: models.AgentClaude, Details: models.SessionDetails{RepoName: "cosmo"}},
+		{Name: "billing", AgentType: models.AgentCodex, Path: "/src/billing-service"},
+		{Name: "frontend/fix-nav", AgentType: models.AgentPi, Details: models.SessionDetails{Worktree: "fix-nav"}},
+	}
+	for query, want := range map[string]string{
+		"Cosmo-AI":        "cosmo-ai",
+		"codex":           "billing",
+		"pi":              "frontend/fix-nav",
+		"cosmo":           "cosmo-ai",
+		"billing-service": "billing",
+		"fix-nav":         "frontend/fix-nav",
+		"front":           "frontend/fix-nav",
+	} {
+		got, err := resolveSession(query, sessions)
+		if err != nil {
+			t.Errorf("resolveSession(%q): %v", query, err)
+			continue
+		}
+		if got.Name != want {
+			t.Errorf("resolveSession(%q) = %q, want %q", query, got.Name, want)
+		}
+	}
+}
+
+func TestResolveSessionAmbiguousAgentType(t *testing.T) {
+	sessions := []models.Session{
+		{Name: "a", AgentType: models.AgentClaude},
+		{Name: "b", AgentType: models.AgentClaude},
+	}
+	if _, err := resolveSession("claude", sessions); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("two Claude sessions must be ambiguous, got %v", err)
 	}
 }
 
