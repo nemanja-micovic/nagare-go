@@ -19,6 +19,7 @@ local status_word = {
   running = "working",
   idle = "idle",
   dead = "exited",
+  saved = "saved",
 }
 
 --- Groups entries under their projects. Projects with an open tab are
@@ -28,7 +29,7 @@ function M.groups(entries)
   local function group(root)
     local g = by_root[root]
     if not g then
-      g = { root = root, name = util.basename(root), entries = {}, rank = 5 }
+      g = { root = root, name = util.basename(root), entries = {}, rank = 9 }
       by_root[root] = g
       table.insert(groups, g)
     end
@@ -43,14 +44,11 @@ function M.groups(entries)
   for _, e in ipairs(entries) do
     local g = group(e.root)
     table.insert(g.entries, e)
-    g.rank = math.min(g.rank, agents.rank[e.status] or 4)
-  end
-  local function by_name(a, b)
-    return a.name < b.name
+    g.rank = math.min(g.rank, agents.rank[e.status] or 8)
   end
   for _, g in ipairs(groups) do
     table.sort(g.entries, function(a, b)
-      local ra, rb = agents.rank[a.status] or 4, agents.rank[b.status] or 4
+      local ra, rb = agents.rank[a.status] or 8, agents.rank[b.status] or 8
       if ra ~= rb then
         return ra < rb
       end
@@ -64,30 +62,9 @@ function M.groups(entries)
     if a.rank ~= b.rank then
       return a.rank < b.rank
     end
-    return by_name(a, b)
+    return a.name < b.name
   end)
   return groups
-end
-
--- In drop order: on a narrow board the tail goes first. "q close" is not in
--- the list — it is reserved, because trimming from the end would take the
--- way out with it.
-local hint_list = {
-  "⏎ jump", "p peek", "a new", "y approve", "n next", "w worktree",
-  "x kill", "o project", "A agent…", "r rename",
-}
-
-function M.hints(width)
-  local out = " "
-  local exit = "q close"
-  for _, h in ipairs(hint_list) do
-    local candidate = out .. h .. "  "
-    if vim.fn.strdisplaywidth(candidate .. exit) > width then
-      break
-    end
-    out = candidate
-  end
-  return out .. exit
 end
 
 -- A line under construction: text plus highlight spans in byte columns.
@@ -103,17 +80,187 @@ local function line()
   return l
 end
 
+-- Actions -------------------------------------------------------------------
+
+local function item()
+  if not (state and api.nvim_win_is_valid(state.win)) then
+    return nil
+  end
+  return state.rows[api.nvim_win_get_cursor(state.win)[1]]
+end
+
+local function selected_agent()
+  local it = item()
+  return it and it.kind == "agent" and it.entry or nil
+end
+
+local function move(delta)
+  local lnum = api.nvim_win_get_cursor(state.win)[1]
+  local n = api.nvim_buf_line_count(state.buf)
+  local i = lnum + delta
+  while i >= 1 and i <= n do
+    if state.rows[i] then
+      api.nvim_win_set_cursor(state.win, { i, 0 })
+      return
+    end
+    i = i + delta
+  end
+end
+
+-- Runs fn after the board is gone, so it acts on the editor behind it.
+local function after_close(fn)
+  return function()
+    local it = item()
+    if not it then
+      return
+    end
+    M.close()
+    fn(it)
+  end
+end
+
+local function approve(always)
+  local e = selected_agent()
+  if not e then
+    return
+  end
+  local ok = e.source == "tmux" and require("nagare.tmux").approve(e, always) or agents.approve(e, always)
+  if not ok then
+    vim.notify("nagare: " .. e.name .. " is not waiting", vim.log.levels.INFO)
+  end
+end
+
+-- One table drives the buffer maps, the hint line and the g? help, so the
+-- three cannot drift apart. `hint` is the short label; entries without one
+-- are listed only in the help. Order is the hint line's drop order.
+M.keys = {
+  { "<CR>", "jump", "Jump to agent / open project", after_close(function(it)
+    require("nagare").jump(it.entry or { root = it.root })
+  end) },
+  { "p", "peek", "Peek agent in a float", after_close(function(it)
+    if it.kind == "agent" then
+      require("nagare").peek(it.entry)
+    else
+      projects.open(it.root, { explicit = true })
+    end
+  end) },
+  { "a", "new", "New agent in this project", after_close(function(it)
+    require("nagare").new({ cwd = it.root })
+  end) },
+  { "y", "approve", "Approve a waiting agent", function()
+    approve(false)
+  end },
+  { "n", "next", "Jump to the next waiting agent", function()
+    M.close()
+    require("nagare").next_waiting()
+  end },
+  { "w", "worktree", "New worktree + agent", after_close(function(it)
+    projects.open(it.root)
+    require("nagare").worktree()
+  end) },
+  { "c", "resume", "Resume a dead or saved agent", function()
+    local e = selected_agent()
+    if e and e.source == "nvim" then
+      local ok, err = agents.resume(e)
+      if not ok then
+        vim.notify("nagare: " .. err, vim.log.levels.ERROR)
+      end
+      M.render(e.key)
+    end
+  end },
+  { "x", "kill", "Kill agent; on a dead or saved one, forget it", function()
+    local e = selected_agent()
+    if not e then
+      return
+    end
+    if e.source == "tmux" then
+      vim.notify("nagare: tmux agents are managed from tmux", vim.log.levels.INFO)
+    elseif not agents.alive(e) then
+      agents.remove(e)
+      M.render()
+    else
+      vim.ui.select({ "Kill", "Cancel" }, { prompt = "Kill " .. agents.label(e) .. "?" }, function(choice)
+        if choice == "Kill" then
+          agents.kill(e)
+        end
+      end)
+    end
+  end },
+  { "o", "project", "Open another project", function()
+    M.close()
+    projects.pick()
+  end },
+  { "A", "agent…", "New agent, choosing which", after_close(function(it)
+    require("nagare").choose(it.root)
+  end) },
+  { "r", "rename", "Rename agent", function()
+    local e = selected_agent()
+    if not e or e.source ~= "nvim" then
+      return
+    end
+    vim.ui.input({ prompt = "Name: ", default = e.name }, function(name)
+      if name and name ~= "" then
+        agents.rename(e, name)
+        M.render(e.key)
+      end
+    end)
+  end },
+  { "Y", nil, "Approve always (the option below Yes)", function()
+    approve(true)
+  end },
+  { "R", nil, "Refresh", function()
+    util.forget_repos()
+    require("nagare.tmux").refresh()
+    M.render()
+  end },
+  { "1-9", nil, "Jump to the agent in that slot", nil },
+  { "g?", nil, "This help", function()
+    M.help()
+  end },
+  { "q", nil, "Close", function()
+    M.close()
+  end },
+}
+
+--- The hint line, trimmed in drop order to fit. "q close" is reserved:
+--- trimming from the end would take the way out with it.
+function M.hints(width)
+  local out = " "
+  local tail = "g? help  q close"
+  if vim.fn.strdisplaywidth(" " .. tail) > width then
+    tail = "q close"
+  end
+  for _, k in ipairs(M.keys) do
+    if k[2] then
+      local candidate = out .. (k[1] == "<CR>" and "⏎" or k[1]) .. " " .. k[2] .. "  "
+      if vim.fn.strdisplaywidth(candidate .. tail) > width then
+        break
+      end
+      out = candidate
+    end
+  end
+  return out .. tail
+end
+
+-- Layout --------------------------------------------------------------------
+
 --- Lays the board out at `width` cells. Returns lines (each with text and
 --- highlights) and rows, which map a line number to the entry or project
 --- on it. Pure apart from reading editor state, so tests call it directly.
 function M.build(width)
   local nagare = require("nagare")
   local groups = M.groups(nagare.entries())
+  local slots = {}
+  for i, a in ipairs(nagare.slots()) do
+    if i <= 9 then
+      slots[a] = i
+    end
+  end
   local lines, rows = {}, {}
 
   local counts = nagare.summary()
   local head = line():add(" nagare ", "NagareTitle")
-  for _, s in ipairs({ "waiting_input", "running", "idle" }) do
+  for _, s in ipairs({ "waiting_input", "running", "idle", "saved" }) do
     if counts[s] > 0 then
       head:add("  "):add(("%s %d %s"):format(nagare.status_icon[s], counts[s], status_word[s]), nagare.status_hl[s])
     end
@@ -124,13 +271,13 @@ function M.build(width)
   table.insert(lines, head)
   table.insert(lines, line())
 
-  -- Columns: 4 indent, icon, sigil, name, status, age, message, branch.
+  -- Columns: slot, icon, sigil, name, status, age, message, branch.
   local name_w = math.max(math.min(24, math.floor(width * 0.26)), 10)
   local branch_w = math.max(math.min(22, math.floor(width * 0.2)), 8)
-  local msg_w = width - (4 + 2 + 2 + name_w + 1 + 8 + 5 + branch_w + 1)
+  local msg_w = width - (6 + 2 + 2 + name_w + 1 + 8 + 5 + branch_w + 1)
 
   for gi, g in ipairs(groups) do
-    local st = g.rank <= 4 and g.entries[1] and g.entries[1].status or nil
+    local st = g.entries[1] and g.entries[1].status or nil
     local l = line():add("  ")
     if st then
       l:add(nagare.status_icon[st], nagare.status_hl[st])
@@ -146,7 +293,6 @@ function M.build(width)
     if repo.branch then
       table.insert(right, repo.branch)
     end
-    g.branch = repo.branch
     local r = table.concat(right, " · ")
     local pad = width - vim.fn.strdisplaywidth(l.text) - vim.fn.strdisplaywidth(r) - 1
     l:add(string.rep(" ", math.max(pad, 1))):add(r, "NagareDim")
@@ -154,11 +300,12 @@ function M.build(width)
     rows[#lines] = { kind = "project", root = g.root, key = "project:" .. g.root }
 
     if #g.entries == 0 then
-      table.insert(lines, line():add("      no agents", "NagareDim"))
+      table.insert(lines, line():add("      no agents — a starts one", "NagareDim"))
       rows[#lines] = { kind = "project", root = g.root, key = "project:" .. g.root .. ":empty" }
     end
     for _, e in ipairs(g.entries) do
-      local a = line():add("    ")
+      local a = line():add("  ")
+      a:add(slots[e] and tostring(slots[e]) or " ", "NagareSlot"):add(" ")
       a:add(nagare.status_icon[e.status] or "?", nagare.status_hl[e.status])
       a:add(" "):add(nagare.sigil(e.kind), "NagareAgent_" .. (e.kind or ""))
       a:add(" "):add(util.fit(e.name, name_w), e.source == "tmux" and "NagareTmux" or nil)
@@ -169,9 +316,7 @@ function M.build(width)
       end
       -- The header already names the main checkout's branch; repeating it on
       -- every child is noise. A branch that differs is worth showing.
-      local tag = e.worktree and ("⎇ " .. e.worktree)
-        or (e.branch ~= g.branch and e.branch)
-        or ""
+      local tag = e.worktree and ("⎇ " .. e.worktree) or (e.branch ~= repo.branch and e.branch) or ""
       if e.source == "tmux" then
         tag = "tmux" .. (tag ~= "" and (" · " .. tag) or "")
       end
@@ -189,37 +334,20 @@ function M.build(width)
   return lines, rows
 end
 
-local function item()
-  if not state then
-    return nil
+local function border()
+  local b = config.board.border
+  if b == nil and vim.fn.exists("+winborder") == 1 and vim.o.winborder ~= "" then
+    return nil -- follow 'winborder'
   end
-  local lnum = api.nvim_win_get_cursor(state.win)[1]
-  return state.rows[lnum]
+  return b or "rounded"
 end
 
-local function selectable(lnum)
-  return state.rows[lnum] ~= nil
-end
-
-local function move(delta)
-  local lnum = api.nvim_win_get_cursor(state.win)[1]
-  local n = api.nvim_buf_line_count(state.buf)
-  local i = lnum + delta
-  while i >= 1 and i <= n do
-    if selectable(i) then
-      api.nvim_win_set_cursor(state.win, { i, 0 })
-      return
-    end
-    i = i + delta
-  end
-end
-
-local function render(focus_key)
+function M.render(focus_key)
   if not (state and api.nvim_win_is_valid(state.win)) then
     return
   end
   local keep = focus_key or (item() or {}).key
-  local width = api.nvim_win_get_width(state.win)
+  local width = math.max(math.min(vim.o.columns - 8, config.board.width), 40)
   local lines, rows = M.build(width)
   state.rows = rows
 
@@ -233,16 +361,16 @@ local function render(focus_key)
   api.nvim_buf_clear_namespace(state.buf, ns, 0, -1)
   for i, l in ipairs(lines) do
     for _, h in ipairs(l.hls) do
-      api.nvim_buf_add_highlight(state.buf, ns, h[1], i - 1, h[2], h[3])
+      api.nvim_buf_set_extmark(state.buf, ns, i - 1, h[2], { end_col = h[3], hl_group = h[1] })
     end
   end
 
-  local height = math.min(#lines, vim.o.lines - 6)
+  local height = math.max(math.min(#lines, vim.o.lines - 6), 3)
   api.nvim_win_set_config(state.win, {
     relative = "editor",
     width = width,
-    height = math.max(height, 3),
-    row = math.floor((vim.o.lines - height) / 2) - 1,
+    height = height,
+    row = math.max(math.floor((vim.o.lines - height) / 2) - 1, 0),
     col = math.floor((vim.o.columns - width) / 2),
   })
 
@@ -256,195 +384,114 @@ local function render(focus_key)
   end
   if not target then
     for lnum = 1, #lines do
-      local r = rows[lnum]
-      if r and r.kind == "agent" then
+      if rows[lnum] and rows[lnum].kind == "agent" then
         target = lnum
         break
       end
     end
   end
-  target = target or next(rows) and math.min(unpack(vim.tbl_keys(rows)))
+  if not target and next(rows) then
+    target = math.min(unpack(vim.tbl_keys(rows)))
+  end
   if target then
     api.nvim_win_set_cursor(state.win, { target, 0 })
   end
 end
 
-M.render = render
-
 function M.close()
   if not state then
     return
   end
-  if state.timer then
-    state.timer:stop()
-    state.timer:close()
-  end
-  if api.nvim_win_is_valid(state.win) then
-    pcall(api.nvim_win_close, state.win, true)
-  end
-  if api.nvim_buf_is_valid(state.buf) then
-    pcall(api.nvim_buf_delete, state.buf, { force = true })
+  local s = state
+  state = nil
+  if s.timer then
+    s.timer:stop()
+    s.timer:close()
   end
   pcall(api.nvim_del_augroup_by_name, "nagare_board")
-  state = nil
+  if api.nvim_win_is_valid(s.win) then
+    pcall(api.nvim_win_close, s.win, true)
+  end
+  if api.nvim_buf_is_valid(s.buf) then
+    pcall(api.nvim_buf_delete, s.buf, { force = true })
+  end
 end
 
 function M.is_open()
   return state ~= nil
 end
 
--- Runs fn after the board is gone, so it acts on the editor behind it.
-local function after_close(fn)
-  return function()
-    local it = item()
-    if not it then
-      return
-    end
-    M.close()
-    fn(it)
+--- A help window listing every key, from the same table as the maps.
+function M.help()
+  if not state then
+    return
   end
-end
-
-local function actions()
-  local nagare = require("nagare")
-  local function agent_of(it)
-    return it.kind == "agent" and it.entry or nil
+  local lines = { "" }
+  for _, k in ipairs(M.keys) do
+    table.insert(lines, ("  %-5s %s"):format(k[1], k[3]))
   end
-  return {
-    ["<CR>"] = after_close(function(it)
-      nagare.jump(it.entry or { root = it.root })
-    end),
-    p = after_close(function(it)
-      if agent_of(it) then
-        nagare.peek(it.entry)
-      else
-        projects.open(it.root, { explicit = true })
-      end
-    end),
-    a = after_close(function(it)
-      nagare.new({ cwd = it.root })
-    end),
-    A = after_close(function(it)
-      local kinds = vim.tbl_keys(config.options.agents)
-      table.sort(kinds)
-      vim.ui.select(kinds, { prompt = "Agent" }, function(kind)
-        if kind then
-          nagare.new({ cwd = it.root, kind = kind })
-        end
-      end)
-    end),
-    w = after_close(function(it)
-      projects.open(it.root)
-      nagare.worktree()
-    end),
-    y = function()
-      local e = agent_of(item() or {})
-      if e then
-        local ok = e.source == "tmux" and require("nagare.tmux").approve(e) or agents.approve(e)
-        if not ok then
-          vim.notify("nagare: " .. e.name .. " is not waiting", vim.log.levels.INFO)
-        end
-      end
-    end,
-    Y = function()
-      local e = agent_of(item() or {})
-      if e then
-        local _ = e.source == "tmux" and require("nagare.tmux").approve(e, true) or agents.approve(e, true)
-      end
-    end,
-    x = function()
-      local e = agent_of(item() or {})
-      if not e then
-        return
-      end
-      if e.source == "tmux" then
-        vim.notify("nagare: tmux agents are managed from tmux", vim.log.levels.INFO)
-        return
-      end
-      if e.status == "dead" then
-        agents.remove(e)
-        render()
-        return
-      end
-      vim.ui.select({ "yes", "no" }, { prompt = "Kill " .. agents.label(e) .. "?" }, function(choice)
-        if choice == "yes" then
-          agents.kill(e)
-        end
-      end)
-    end,
-    r = function()
-      local e = agent_of(item() or {})
-      if not e or e.source ~= "nvim" then
-        return
-      end
-      vim.ui.input({ prompt = "Name: ", default = e.name }, function(name)
-        if name and name ~= "" then
-          agents.rename(e, name)
-          render(e.key)
-        end
-      end)
-    end,
-    n = function()
-      M.close()
-      nagare.next_waiting()
-    end,
-    o = function()
-      M.close()
-      projects.pick()
-    end,
-    R = function()
-      util.forget_repos()
-      require("nagare.tmux").refresh()
-      render()
-    end,
-    q = M.close,
-    ["<Esc>"] = M.close,
-    j = function()
-      move(1)
-    end,
-    k = function()
-      move(-1)
-    end,
-    ["<Down>"] = function()
-      move(1)
-    end,
-    ["<Up>"] = function()
-      move(-1)
-    end,
-  }
+  table.insert(lines, "")
+  local buf = api.nvim_create_buf(false, true)
+  api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.bo[buf].bufhidden = "wipe"
+  for i = 2, #lines - 1 do
+    api.nvim_buf_set_extmark(buf, ns, i - 1, 2, { end_col = 7, hl_group = "NagareKey" })
+  end
+  local width = 0
+  for _, l in ipairs(lines) do
+    width = math.max(width, vim.fn.strdisplaywidth(l) + 2)
+  end
+  local win = api.nvim_open_win(buf, true, {
+    relative = "editor", style = "minimal", border = border(), zindex = 60,
+    width = width, height = #lines,
+    row = math.floor((vim.o.lines - #lines) / 2), col = math.floor((vim.o.columns - width) / 2),
+    title = " board keys ", title_pos = "center",
+  })
+  vim.wo[win].winhighlight = "NormalFloat:NagareNormal,FloatBorder:NagareBorder,FloatTitle:NagareTitle"
+  for _, lhs in ipairs({ "q", "<Esc>", "g?" }) do
+    vim.keymap.set("n", lhs, function()
+      pcall(api.nvim_win_close, win, true)
+    end, { buffer = buf, nowait = true })
+  end
 end
 
 function M.open()
   if state then
-    render()
+    M.render()
     return
   end
   local buf = api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].filetype = "nagare"
-  local width = math.max(math.min(vim.o.columns - 8, 118), 40)
-  local cfg = {
-    relative = "editor",
-    width = width,
-    height = 3,
-    row = 2,
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = "rounded",
-    zindex = 50,
-  }
-  if vim.fn.has("nvim-0.9") == 1 then
-    cfg.title = " agents "
-    cfg.title_pos = "center"
-  end
-  local win = api.nvim_open_win(buf, true, cfg)
+  local win = api.nvim_open_win(buf, true, {
+    relative = "editor", width = 60, height = 3, row = 2, col = 2,
+    style = "minimal", border = border(), zindex = 50,
+    title = " agents ", title_pos = "center",
+  })
   vim.wo[win].cursorline = true
   vim.wo[win].wrap = false
-  vim.wo[win].winhighlight = "NormalFloat:Normal,FloatBorder:NagareBorder,FloatTitle:NagareTitle"
+  vim.wo[win].winfixbuf = true
+  vim.wo[win].winhighlight = "NormalFloat:NagareNormal,FloatBorder:NagareBorder,FloatTitle:NagareTitle"
   state = { buf = buf, win = win, rows = {} }
 
-  for lhs, fn in pairs(actions()) do
-    vim.keymap.set("n", lhs, fn, { buffer = buf, nowait = true, silent = true })
+  local opts = { buffer = buf, nowait = true, silent = true }
+  for _, k in ipairs(M.keys) do
+    if k[4] then
+      vim.keymap.set("n", k[1], k[4], vim.tbl_extend("force", opts, { desc = k[3] }))
+    end
+  end
+  vim.keymap.set("n", "<Esc>", M.close, vim.tbl_extend("force", opts, { desc = "Close" }))
+  for _, pair in ipairs({ { "j", 1 }, { "<Down>", 1 }, { "k", -1 }, { "<Up>", -1 } }) do
+    vim.keymap.set("n", pair[1], function()
+      move(pair[2])
+    end, opts)
+  end
+  for n = 1, 9 do
+    vim.keymap.set("n", tostring(n), function()
+      M.close()
+      require("nagare").slot(n)
+    end, vim.tbl_extend("force", opts, { desc = "Agent in slot " .. n }))
   end
 
   local group = api.nvim_create_augroup("nagare_board", { clear = true })
@@ -452,7 +499,7 @@ function M.open()
     group = group,
     pattern = "NagareStatus",
     callback = function()
-      render()
+      M.render()
     end,
   })
   api.nvim_create_autocmd("WinLeave", {
@@ -460,7 +507,13 @@ function M.open()
     buffer = buf,
     callback = function()
       vim.schedule(function()
-        if state and state.win == win and api.nvim_get_current_win() ~= win then
+        if not state or state.win ~= win then
+          return
+        end
+        -- A float over the board (help, a vim.ui.select or input) is part
+        -- of using it; only leaving for a real window closes it.
+        local cur = api.nvim_get_current_win()
+        if cur ~= win and api.nvim_win_get_config(cur).relative == "" and vim.fn.getcmdwintype() == "" then
           M.close()
         end
       end)
@@ -469,10 +522,10 @@ function M.open()
   -- The age column goes stale while the board sits open.
   state.timer = util.uv.new_timer()
   state.timer:start(5000, 5000, vim.schedule_wrap(function()
-    render()
+    M.render()
   end))
 
-  render()
+  M.render()
 end
 
 return M

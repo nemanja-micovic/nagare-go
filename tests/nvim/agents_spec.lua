@@ -7,7 +7,7 @@ local api = vim.api
 -- A stand-in agent CLI: a shell script that behaves like an agent at a
 -- permission prompt.
 local function use_fake(script)
-  config.options.agents.fake = { cmd = { "bash", "-c", script }, sigil = "F" }
+  config.agents.fake = { cmd = { "bash", "-c", script }, sigil = "F" }
 end
 
 local function agent_windows()
@@ -40,7 +40,7 @@ return {
     local a, err = agents.spawn({ kind = "nope" })
     eq(a, nil)
     truthy(err:find("unknown agent"), err)
-    config.options.agents.ghost = { cmd = { "definitely-not-installed-xyz" } }
+    config.agents.ghost = { cmd = { "definitely-not-installed-xyz" } }
     a, err = agents.spawn({ kind = "ghost" })
     eq(a, nil)
     truthy(err:find("not installed"), err)
@@ -89,8 +89,8 @@ return {
     vim.fn.mkdir(home .. "/.local/share/nagare/states", "p")
     local old_home = vim.env.HOME
     vim.env.HOME = home
-    config.options.states_dir = home .. "/.local/share/nagare/states"
-    require("nagare.status").start()
+    config.set("states_dir", home .. "/.local/share/nagare/states")
+    require("nagare.status").restart()
 
     local repo = git_repo("hooked")
     local event = vim.json.encode({
@@ -108,8 +108,8 @@ return {
       eq(a.notification_type, "permission_prompt")
     end)
     vim.env.HOME = old_home
-    config.options.states_dir = SANDBOX .. "/states"
-    require("nagare.status").start()
+    config.set("states_dir", SANDBOX .. "/states")
+    require("nagare.status").restart()
     assert(ok, err)
   end },
 

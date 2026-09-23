@@ -8,9 +8,14 @@ local M = {}
 local current -- { win = , buf = }
 
 local function geometry()
+  local cfg = require("nagare.config").peek
   local cols, lines = vim.o.columns, vim.o.lines - vim.o.cmdheight - 1
-  local width = math.max(math.min(cols - 4, math.floor(cols * 0.86)), 20)
-  local height = math.max(math.min(lines - 2, math.floor(lines * 0.8)), 6)
+  local width = math.max(math.min(cols - 4, math.floor(cols * cfg.width)), 20)
+  local height = math.max(math.min(lines - 2, math.floor(lines * cfg.height)), 6)
+  local border = cfg.border
+  if border == nil and not (vim.fn.exists("+winborder") == 1 and vim.o.winborder ~= "") then
+    border = "rounded"
+  end
   return {
     relative = "editor",
     width = width,
@@ -18,7 +23,7 @@ local function geometry()
     col = math.floor((cols - width) / 2),
     row = math.floor((lines - height) / 2),
     style = "minimal",
-    border = "rounded",
+    border = border,
     zindex = 60,
   }
 end
@@ -28,6 +33,7 @@ function M.is_peek(win)
 end
 
 function M.close()
+  pcall(api.nvim_del_augroup_by_name, "nagare_peek")
   if current and api.nvim_win_is_valid(current.win) then
     pcall(api.nvim_win_close, current.win, true)
   end
@@ -37,14 +43,14 @@ end
 local function open(buf, title)
   M.close()
   local cfg = geometry()
-  if vim.fn.has("nvim-0.9") == 1 then
-    cfg.title = " " .. title .. " "
-    cfg.title_pos = "center"
-  end
+  cfg.title = " " .. title .. " "
+  cfg.title_pos = "center"
   local win = api.nvim_open_win(buf, true, cfg)
   vim.wo[win].winhighlight = "NormalFloat:Normal,FloatBorder:NagareBorder,FloatTitle:NagareTitle"
+  vim.wo[win].winfixbuf = true
   current = { win = win, buf = buf }
   api.nvim_create_autocmd("WinLeave", {
+    group = api.nvim_create_augroup("nagare_peek", { clear = true }),
     buffer = buf,
     once = true,
     callback = function()
@@ -63,7 +69,7 @@ function M.open(agent)
   local agents = require("nagare.agents")
   agents.touch(agent)
   open(agent.buf, ("%s · %s"):format(agents.label(agent), agent.status:gsub("_", " ")))
-  if agent.status ~= "dead" then
+  if agent.status ~= "dead" and agent.mode ~= "normal" then
     vim.cmd("startinsert")
   end
 end

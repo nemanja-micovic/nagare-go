@@ -1,27 +1,50 @@
--- Loaded at startup. Defines :Nagare so the plugin works without an explicit
--- setup() call; the first use runs setup() with defaults. Calling
--- require("nagare").setup({...}) yourself replaces this command.
+-- Kept cheap: a command, <Plug> maps, and a scheduled init. Every require
+-- happens inside a callback, so startup loads nothing but this file.
+-- setup() is optional; configure with it or with vim.g.nagare.
 if vim.g.loaded_nagare then
   return
 end
 vim.g.loaded_nagare = true
 
-if vim.fn.has("nvim-0.9") ~= 1 then
-  vim.api.nvim_err_writeln("nagare requires Neovim 0.9 or newer")
-  return
-end
-
--- init.lua runs before plugin/: a user who already called setup() has the
--- real command, and replacing it with this stub would make it call itself.
-if vim.fn.exists(":Nagare") == 2 then
+if vim.fn.has("nvim-0.10") ~= 1 then
+  vim.notify("nagare requires Neovim 0.10 or newer", vim.log.levels.ERROR)
   return
 end
 
 vim.api.nvim_create_user_command("Nagare", function(cmd)
-  local nagare = require("nagare")
-  if not nagare._setup_done then
-    nagare.setup()
-  end
-  local range = cmd.range > 0 and (cmd.line1 .. "," .. cmd.line2) or ""
-  vim.cmd(range .. "Nagare " .. cmd.args)
-end, { nargs = "*", range = true, desc = "nagare: agents across projects" })
+  require("nagare.commands").run(cmd)
+end, {
+  nargs = "*",
+  range = true,
+  desc = "nagare: agents across projects",
+  complete = function(lead, line)
+    return require("nagare.commands").complete(lead, line)
+  end,
+})
+
+local plugs = {
+  board = function() require("nagare").board() end,
+  toggle = function() require("nagare").toggle() end,
+  next = function() require("nagare").next_waiting() end,
+  peek = function() require("nagare").peek() end,
+  new = function() require("nagare").choose() end,
+  worktree = function() require("nagare").worktree() end,
+  project = function() require("nagare.projects").pick() end,
+  pick = function() require("nagare").pick() end,
+}
+for name, fn in pairs(plugs) do
+  vim.keymap.set("n", "<Plug>(nagare-" .. name .. ")", fn)
+end
+for n = 1, 9 do
+  vim.keymap.set("n", ("<Plug>(nagare-slot-%d)"):format(n), function()
+    require("nagare").slot(n)
+  end)
+end
+vim.keymap.set("n", "<Plug>(nagare-send)", "<Cmd>Nagare send<CR>")
+vim.keymap.set("x", "<Plug>(nagare-send)", ":Nagare send<CR>", { silent = true })
+
+-- After startup (and after a setup() call made while loading, as lazy.nvim
+-- does with `opts`), so keymaps and highlights see the final options.
+vim.schedule(function()
+  require("nagare")._init()
+end)

@@ -16,6 +16,18 @@ function M.normalize(path)
   return path
 end
 
+--- Redraws the tabline and statusline, but only for an attached UI. A
+--- headless editor has nothing to draw, and Neovim 0.11 segfaults later on
+--- after `:redrawtabline` runs with no UI — exactly the state of a
+--- `nagare-go nvim` runtime between attaches, while agents keep reporting.
+function M.redraw()
+  if #vim.api.nvim_list_uis() == 0 then
+    return
+  end
+  vim.cmd("redrawtabline")
+  vim.cmd("redrawstatus!")
+end
+
 function M.basename(path)
   return vim.fn.fnamemodify(path, ":t")
 end

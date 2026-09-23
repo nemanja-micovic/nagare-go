@@ -35,7 +35,7 @@ function M.remember(root)
     end
   end
   table.insert(recent, 1, { root = root, used = os.time() })
-  while #recent > config.options.recent_limit do
+  while #recent > config.recent_limit do
     table.remove(recent)
   end
   util.write_file(recent_path(), vim.json.encode(recent))
@@ -147,14 +147,14 @@ function M.open(root, opts)
     created = true
   end
   M.remember(root)
-  local hook = config.options.on_project_open
+  local hook = config.on_project_open
   if created and opts and opts.explicit and hook then
     local ok, err = pcall(hook == "auto" and auto_open or hook, root)
     if not ok then
       vim.notify("nagare: on_project_open: " .. tostring(err), vim.log.levels.ERROR)
     end
   end
-  vim.cmd("redrawtabline")
+  require("nagare.util").redraw()
   return tab, created
 end
 
@@ -190,7 +190,7 @@ function M.known()
   for _, a in ipairs(require("nagare.tmux").list) do
     add(a.root)
   end
-  for _, pattern in ipairs(config.options.projects or {}) do
+  for _, pattern in ipairs(config.projects or {}) do
     for _, dir in ipairs(vim.fn.glob(vim.fn.expand(pattern), false, true)) do
       if vim.fn.isdirectory(dir .. "/.git") == 1 or vim.fn.filereadable(dir .. "/.git") == 1 then
         add(util.normalize(dir))

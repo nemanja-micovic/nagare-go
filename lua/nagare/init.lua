@@ -5,32 +5,32 @@
 -- code in that project's tab; peeking is showing it in a float over whatever
 -- you are editing. The board is one view of every agent in every project —
 -- including agents still living in tmux.
-local agents = require("nagare.agents")
+--
+-- Nothing here runs at require time. plugin/nagare.lua defines the command
+-- and <Plug> maps and schedules M._init(); setup() only merges options.
 local config = require("nagare.config")
-local projects = require("nagare.projects")
-local status = require("nagare.status")
-local tmux = require("nagare.tmux")
-local util = require("nagare.util")
 
 local api = vim.api
 
 local M = {}
 
-M.agents = agents
-M.projects = projects
-
-local status_colors = {
-  NagareWaiting = "#db4b4b",
-  NagareRunning = "#e0af68",
-  NagareIdle = "#00D26A",
-  NagareDead = "#565f89",
-}
+-- Modules load on first use.
+local function agents()
+  return require("nagare.agents")
+end
+local function projects()
+  return require("nagare.projects")
+end
+local function util()
+  return require("nagare.util")
+end
 
 M.status_hl = {
   waiting_input = "NagareWaiting",
   running = "NagareRunning",
   idle = "NagareIdle",
   dead = "NagareDead",
+  saved = "NagareSaved",
 }
 
 M.status_icon = {
@@ -38,43 +38,53 @@ M.status_icon = {
   running = "◐",
   idle = "○",
   dead = "✕",
+  saved = "◌",
+}
+
+-- Status colours follow the colorscheme through the diagnostic groups, so a
+-- waiting agent is exactly as red as an error in your theme.
+local links = {
+  NagareWaiting = "DiagnosticError",
+  NagareRunning = "DiagnosticWarn",
+  NagareIdle = "DiagnosticOk",
+  NagareDead = "NonText",
+  NagareSaved = "Comment",
+  NagareProject = "Title",
+  NagareDim = "Comment",
+  NagareNormal = "NormalFloat",
+  NagareBorder = "FloatBorder",
+  NagareTitle = "FloatTitle",
+  NagareFooter = "FloatFooter",
+  NagareKey = "Special",
+  NagareSlot = "Number",
+  NagareTmux = "Comment",
 }
 
 local function highlights()
-  for name, fg in pairs(status_colors) do
-    api.nvim_set_hl(0, name, { fg = fg, default = true })
+  for name, target in pairs(links) do
+    api.nvim_set_hl(0, name, { link = target, default = true })
   end
-  api.nvim_set_hl(0, "NagareProject", { link = "Title", default = true })
-  api.nvim_set_hl(0, "NagareDim", { link = "Comment", default = true })
-  api.nvim_set_hl(0, "NagareBorder", { link = "FloatBorder", default = true })
-  api.nvim_set_hl(0, "NagareTitle", { link = "Title", default = true })
-  api.nvim_set_hl(0, "NagareHeader", { link = "Special", default = true })
-  api.nvim_set_hl(0, "NagareTmux", { link = "Comment", default = true })
-  for kind, spec in pairs(config.options.agents) do
+  for kind, spec in pairs(config.agents) do
     api.nvim_set_hl(0, "NagareAgent_" .. kind, { fg = spec.color, bold = true, default = true })
   end
 end
 
 function M.sigil(kind)
-  local spec = config.options.agents[kind]
+  local spec = config.agents[kind]
   return spec and spec.sigil or (kind or "?"):sub(1, 1):upper()
 end
 
 --- Every agent, editor-owned and tmux, as one list.
 function M.entries()
-  local out = {}
-  for _, a in ipairs(agents.list) do
-    table.insert(out, a)
-  end
-  for _, a in ipairs(tmux.list) do
-    table.insert(out, a)
-  end
-  return out
+  local tmux = require("nagare.tmux")
+  tmux.start()
+  local out = vim.list_extend({}, agents().list)
+  return vim.list_extend(out, tmux.list)
 end
 
 --- Counts by status across every agent.
 function M.summary()
-  local counts = { waiting_input = 0, running = 0, idle = 0, dead = 0 }
+  local counts = { waiting_input = 0, running = 0, idle = 0, dead = 0, saved = 0 }
   for _, a in ipairs(M.entries()) do
     counts[a.status] = (counts[a.status] or 0) + 1
   end
@@ -93,8 +103,8 @@ function M.statusline()
   return table.concat(parts, " ")
 end
 
---- A lualine component. In LazyVim:
----   opts = function(_, o) table.insert(o.sections.lualine_x, 1, require("nagare").lualine()) end
+--- A lualine component table, for users who build lualine sections by hand.
+--- `lualine_x = { "nagare" }` works too (lua/lualine/components/nagare.lua).
 function M.lualine()
   return {
     function()
@@ -112,17 +122,17 @@ function M.lualine()
       return c.waiting_input + c.running > 0
     end,
     color = function()
-      local fg = M.summary().waiting_input > 0 and status_colors.NagareWaiting or status_colors.NagareRunning
-      return { fg = fg }
+      return M.summary().waiting_input > 0 and "NagareWaiting" or "NagareRunning"
     end,
   }
 end
 
 --- The most urgent status among a project's agents, or nil.
 function M.project_status(root)
+  local rank = agents().rank
   local best
   for _, a in ipairs(M.entries()) do
-    if a.root == root and (not best or agents.rank[a.status] < agents.rank[best]) then
+    if a.root == root and (not best or rank[a.status] < rank[best]) then
       best = a.status
     end
   end
@@ -133,19 +143,18 @@ function M.tabline()
   local parts = {}
   local current = api.nvim_get_current_tabpage()
   for i, tab in ipairs(api.nvim_list_tabpages()) do
-    local root = projects.tab_root(tab)
+    local root = projects().tab_root(tab)
     local name
     if root then
-      name = util.basename(root)
+      name = util().basename(root)
     else
-      local win = api.nvim_tabpage_get_win(tab)
-      local file = api.nvim_buf_get_name(api.nvim_win_get_buf(win))
+      local file = api.nvim_buf_get_name(api.nvim_win_get_buf(api.nvim_tabpage_get_win(tab)))
       name = file ~= "" and vim.fn.fnamemodify(file, ":t") or "[No Name]"
     end
     local hl = tab == current and "%#TabLineSel#" or "%#TabLine#"
     local dot = ""
     local st = root and M.project_status(root)
-    if st and st ~= "dead" then
+    if st and st ~= "dead" and st ~= "saved" then
       dot = ("%%#%s#%s%s"):format(M.status_hl[st], M.status_icon[st], hl)
     end
     table.insert(parts, ("%s%%%dT %s %s "):format(hl, i, name, dot))
@@ -153,19 +162,37 @@ function M.tabline()
   return table.concat(parts) .. "%#TabLineFill#%T"
 end
 
+--- Puts the cursor into an agent's terminal the way the user left it:
+--- normal mode if they were reading its output, else terminal mode.
+local function enter(agent)
+  if agent.status ~= "dead" and agent.mode ~= "normal" and config.insert_on_jump then
+    vim.cmd("startinsert")
+  else
+    vim.cmd("stopinsert")
+  end
+end
+
 --- Shows an agent in its project's tab, beside the code: reuses a window
---- that already shows an agent, otherwise opens one per `layout`.
+--- that already shows an agent, otherwise opens one per `layout`. A saved
+--- agent is resumed first.
 function M.show(agent)
-  projects.open(agent.root)
-  agents.touch(agent)
-  local layout = config.options.layout
+  if agent.status == "saved" then
+    local ok, err = agents().resume(agent)
+    if not ok then
+      vim.notify("nagare: " .. err, vim.log.levels.ERROR)
+      return
+    end
+  end
+  projects().open(agent.root)
+  agents().touch(agent)
+  local layout = config.layout
   if layout == "float" then
     require("nagare.peek").open(agent)
     return
   end
   local target
   for _, win in ipairs(api.nvim_tabpage_list_wins(0)) do
-    if api.nvim_win_get_config(win).relative == "" and agents.from_buf(api.nvim_win_get_buf(win)) then
+    if api.nvim_win_get_config(win).relative == "" and agents().from_buf(api.nvim_win_get_buf(win)) then
       target = win
       break
     end
@@ -173,15 +200,15 @@ function M.show(agent)
   if target then
     api.nvim_set_current_win(target)
   elseif layout == "split" then
-    vim.cmd(("botright %dsplit"):format(math.max(math.floor(vim.o.lines * config.options.size), 5)))
+    vim.cmd(("botright %dsplit"):format(math.max(math.floor(vim.o.lines * config.size), 5)))
+    vim.wo.winfixheight = true
   elseif layout == "vsplit" then
-    vim.cmd(("botright %dvsplit"):format(math.max(math.floor(vim.o.columns * config.options.size), 20)))
+    vim.cmd(("botright %dvsplit"):format(math.max(math.floor(vim.o.columns * config.size), 20)))
+    vim.wo.winfixwidth = true
   end
   api.nvim_win_set_buf(0, agent.buf)
   vim.wo.number, vim.wo.relativenumber, vim.wo.signcolumn = false, false, "no"
-  if config.options.insert_on_jump and agent.status ~= "dead" then
-    vim.cmd("startinsert")
-  end
+  enter(agent)
 end
 
 --- Goes to any board entry: an editor agent is shown, a tmux one is
@@ -191,11 +218,11 @@ function M.jump(entry)
     return
   end
   if entry.source == "tmux" then
-    tmux.jump(entry)
+    require("nagare.tmux").jump(entry)
   elseif entry.source == "nvim" then
     M.show(entry)
   elseif entry.root then
-    projects.open(entry.root, { explicit = true })
+    projects().open(entry.root, { explicit = true })
   end
 end
 
@@ -206,26 +233,34 @@ function M.peek(entry)
     return
   end
   if entry.source == "tmux" then
-    tmux.jump(entry)
-  else
-    require("nagare.peek").open(entry)
+    require("nagare.tmux").jump(entry)
+    return
   end
+  if entry.status == "saved" then
+    local ok, err = agents().resume(entry)
+    if not ok then
+      vim.notify("nagare: " .. err, vim.log.levels.ERROR)
+      return
+    end
+  end
+  require("nagare.peek").open(entry)
 end
 
 --- The agent that most wants attention: waiting before running before idle,
 --- the current project's before others, then the most recently changed.
 function M.most_urgent()
-  local root = projects.current_root()
-  local best
+  local rank = agents().rank
+  local root = projects().current_root()
+  local function key(a)
+    return { rank[a.status], a.root == root and 0 or 1, -(a.changed or 0) }
+  end
+  local best, best_key
   for _, a in ipairs(M.entries()) do
-    if a.status ~= "dead" then
-      local better = not best
-        or agents.rank[a.status] < agents.rank[best.status]
-        or (agents.rank[a.status] == agents.rank[best.status] and (a.root == root) and best.root ~= root)
-        or (agents.rank[a.status] == agents.rank[best.status] and (a.root == root) == (best.root == root)
-          and (a.changed or 0) > (best.changed or 0))
-      if better then
-        best = a
+    if a.status ~= "dead" and a.status ~= "saved" then
+      local k = key(a)
+      if not best or k[1] < best_key[1] or (k[1] == best_key[1] and (k[2] < best_key[2]
+        or (k[2] == best_key[2] and k[3] < best_key[3]))) then
+        best, best_key = a, k
       end
     end
   end
@@ -236,12 +271,9 @@ end
 --- wrapping, so repeated presses reach every waiting agent once before
 --- repeating. Most-urgent-first would ping-pong between the same two.
 function M.next_waiting(from)
-  local waiting = {}
-  for _, a in ipairs(M.entries()) do
-    if a.status == "waiting_input" then
-      table.insert(waiting, a)
-    end
-  end
+  local waiting = vim.tbl_filter(function(a)
+    return a.status == "waiting_input"
+  end, M.entries())
   if #waiting == 0 then
     vim.notify("nagare: nothing is waiting", vim.log.levels.INFO)
     return
@@ -252,7 +284,7 @@ function M.next_waiting(from)
   table.sort(waiting, function(a, b)
     return order(a) < order(b)
   end)
-  from = from or agents.from_buf(0) or M._last_jump
+  from = from or agents().from_buf(0) or M._last_jump
   local pick = waiting[1]
   if from then
     local here = order(from)
@@ -271,11 +303,27 @@ function M.next_waiting(from)
   return pick
 end
 
+--- The editor's agents in slot order: creation order, which never changes
+--- under you the way urgency order does, so a slot is muscle memory.
+function M.slots()
+  return agents().list
+end
+
+function M.slot(n)
+  local agent = M.slots()[n]
+  if not agent then
+    vim.notify(("nagare: no agent in slot %d"):format(n), vim.log.levels.INFO)
+    return
+  end
+  M.jump(agent)
+  return agent
+end
+
 --- Starts an agent in the current project (or opts.cwd) and shows it.
 function M.new(opts)
   opts = opts or {}
-  local cwd = opts.cwd or projects.current_root()
-  local agent, err = agents.spawn({ kind = opts.kind, cwd = cwd, name = opts.name, args = opts.args })
+  local cwd = opts.cwd or projects().current_root()
+  local agent, err = agents().spawn({ kind = opts.kind, cwd = cwd, name = opts.name, args = opts.args })
   if not agent then
     vim.notify("nagare: " .. err, vim.log.levels.ERROR)
     return
@@ -286,14 +334,31 @@ function M.new(opts)
   return agent
 end
 
+--- Asks which agent to start, then starts it in the project at root.
+function M.choose(root)
+  local kinds = vim.tbl_keys(config.agents)
+  table.sort(kinds)
+  vim.ui.select(kinds, {
+    prompt = "Agent",
+    kind = "nagare_agent",
+    format_item = function(kind)
+      local installed = vim.fn.executable(config.agents[kind].cmd[1]) == 1
+      return ("%s  %s%s"):format(M.sigil(kind), kind, installed and "" or "  (not installed)")
+    end,
+  }, function(kind)
+    if kind then
+      M.new({ kind = kind, cwd = root })
+    end
+  end)
+end
+
 --- Creates a worktree in the current project and starts an agent in it.
 function M.worktree(name, kind)
   local function go(n)
     if not n or n == "" then
       return
     end
-    local root = projects.current_root()
-    local path, err = projects.add_worktree(root, n)
+    local path, err = projects().add_worktree(projects().current_root(), n)
     if not path then
       vim.notify("nagare: " .. err, vim.log.levels.ERROR)
       return
@@ -310,12 +375,9 @@ end
 --- has none, so the key works from a cold start.
 function M.toggle()
   local wins = api.nvim_tabpage_list_wins(0)
-  local shown = {}
-  for _, w in ipairs(wins) do
-    if api.nvim_win_get_config(w).relative == "" and agents.from_buf(api.nvim_win_get_buf(w)) then
-      table.insert(shown, w)
-    end
-  end
+  local shown = vim.tbl_filter(function(w)
+    return api.nvim_win_get_config(w).relative == "" and agents().from_buf(api.nvim_win_get_buf(w)) ~= nil
+  end, wins)
   -- Hide, unless the agent is all the tab holds: closing it would leave
   -- nothing to return to.
   if #shown > 0 and #wins > #shown then
@@ -325,7 +387,7 @@ function M.toggle()
     end
     return
   end
-  local agent = agents.last_used(projects.current_root())
+  local agent = agents().last_used(projects().current_root())
   if agent then
     M.show(agent)
   else
@@ -334,18 +396,24 @@ function M.toggle()
 end
 
 --- Leaves an agent's terminal: closes the peek float, or returns to the
---- code window beside it.
+--- code window beside it. Leaving this way is not "reading its output", so
+--- the next jump comes back in terminal mode.
 function M.leave(agent)
   local peek = require("nagare.peek")
+  agent.leaving = true
+  agent.mode = "terminal"
   vim.cmd("stopinsert")
+  vim.schedule(function()
+    agent.leaving = nil
+  end)
   if peek.is_peek() then
     peek.close()
     return
   end
   vim.cmd("wincmd p")
-  if agents.from_buf(0) == agent then
+  if agents().from_buf(0) == agent then
     for _, w in ipairs(api.nvim_tabpage_list_wins(0)) do
-      if not agents.from_buf(api.nvim_win_get_buf(w)) and api.nvim_win_get_config(w).relative == "" then
+      if not agents().from_buf(api.nvim_win_get_buf(w)) and api.nvim_win_get_config(w).relative == "" then
         api.nvim_set_current_win(w)
         return
       end
@@ -357,26 +425,37 @@ end
 --- without pressing Enter, so you can finish the sentence there.
 function M.send(line1, line2, text)
   local file = api.nvim_buf_get_name(0)
-  local root = projects.current_root()
-  local agent = agents.last_used(root)
-  if not agent or agent.status == "dead" then
-    vim.notify("nagare: no live agent in " .. util.basename(root), vim.log.levels.WARN)
+  local root = projects().current_root()
+  local agent = agents().last_used(root)
+  if not agent or not agents().alive(agent) then
+    vim.notify("nagare: no live agent in " .. util().basename(root), vim.log.levels.WARN)
     return
   end
   local payload = text or ""
   if file ~= "" and vim.bo.buftype == "" then
-    local path = util.normalize(file)
+    local path = util().normalize(file)
     local rel = path:sub(1, #agent.cwd + 1) == agent.cwd .. "/" and path:sub(#agent.cwd + 2) or path
-    local ref = config.options.reference:gsub("{path}", rel):gsub("{from}", line1):gsub("{to}", line2)
+    local ref = config.reference:gsub("{path}", rel):gsub("{from}", line1):gsub("{to}", line2)
     payload = ref .. payload
   end
-  agents.send(agent, payload)
+  agents().send(agent, payload)
   M.show(agent)
+end
+
+--- True inside a runtime started by `nagare-go nvim`. The environment says
+--- so: since 0.10 the built-in TUI is a remote UI too, so a UI channel
+--- cannot tell a persistent runtime from a plain nvim.
+function M.persistent()
+  return (vim.env.NAGARE_RUNTIME or "") ~= ""
 end
 
 --- Detaches this UI from a `nagare-go nvim` runtime, leaving the editor and
 --- every agent running for the next attach.
 function M.detach()
+  if not M.persistent() then
+    vim.notify("nagare: not a persistent runtime — start the editor with `nagare-go nvim`", vim.log.levels.WARN)
+    return
+  end
   if vim.fn.exists(":detach") == 2 then
     vim.cmd("detach")
     return
@@ -387,135 +466,104 @@ function M.detach()
       return
     end
   end
-  vim.notify("nagare: not attached remotely — start the editor with `nagare-go nvim`", vim.log.levels.WARN)
 end
 
 function M.board()
   require("nagare.board").open()
 end
 
-local subcommands = {
-  board = function()
-    M.board()
-  end,
-  new = function(args)
-    M.new({ kind = args[1], cwd = args[2] and util.normalize(args[2]) or nil })
-  end,
-  worktree = function(args)
-    M.worktree(args[1], args[2])
-  end,
-  next = function()
-    M.next_waiting()
-  end,
-  peek = function()
-    M.peek()
-  end,
-  toggle = function()
-    M.toggle()
-  end,
-  project = function(args)
-    if args[1] then
-      projects.open(util.describe(util.normalize(args[1])).root, { explicit = true })
-    else
-      projects.pick()
-    end
-  end,
-  send = function(args, cmd)
-    M.send(cmd.line1, cmd.line2, #args > 0 and table.concat(args, " ") or nil)
-  end,
-  rename = function(args)
-    local agent = agents.from_buf(0)
-    if agent and args[1] then
-      agents.rename(agent, args[1])
-    else
-      vim.notify("nagare: run :Nagare rename <name> from an agent's terminal", vim.log.levels.WARN)
-    end
-  end,
-  detach = function()
-    M.detach()
-  end,
-}
-
-local function complete(arglead, line)
-  local words = vim.split(line, "%s+", { trimempty = false })
-  if #words <= 2 then
-    return vim.tbl_filter(function(s)
-      return s:sub(1, #arglead) == arglead
-    end, vim.tbl_keys(subcommands))
+--- A fuzzy agent picker: snacks' picker when available (with a live
+--- preview of each agent's screen), else vim.ui.select.
+function M.pick()
+  local snacks = rawget(_G, "Snacks")
+  if snacks and snacks.picker and snacks.picker.sources and snacks.picker.sources.nagare then
+    return snacks.picker.nagare()
   end
-  if words[2] == "new" and #words == 3 then
-    return vim.tbl_filter(function(s)
-      return s:sub(1, #arglead) == arglead
-    end, vim.tbl_keys(config.options.agents))
-  end
-  if (words[2] == "new" and #words == 4) or words[2] == "project" then
-    return vim.fn.getcompletion(arglead, "dir")
-  end
-  return {}
+  vim.ui.select(M.entries(), {
+    prompt = "Agent",
+    kind = "nagare_agent",
+    format_item = function(a)
+      return ("%s %s  %s/%s  %s"):format(M.status_icon[a.status], M.sigil(a.kind), a.project, a.name, a.status)
+    end,
+  }, M.jump)
 end
 
-local function command(cmd)
-  local args = vim.split(cmd.args, "%s+", { trimempty = true })
-  local name = table.remove(args, 1) or "board"
-  local fn = subcommands[name]
-  if not fn then
-    vim.notify("nagare: unknown subcommand " .. name, vim.log.levels.ERROR)
+-- Keymaps -------------------------------------------------------------------
+
+M.descriptions = {
+  ["<Plug>(nagare-board)"] = "Agents board",
+  ["<Plug>(nagare-toggle)"] = "Toggle project agent",
+  ["<Plug>(nagare-next)"] = "Next waiting agent",
+  ["<Plug>(nagare-peek)"] = "Peek most urgent agent",
+  ["<Plug>(nagare-new)"] = "New agent",
+  ["<Plug>(nagare-worktree)"] = "New worktree + agent",
+  ["<Plug>(nagare-project)"] = "Open project",
+  ["<Plug>(nagare-pick)"] = "Find agent",
+  ["<Plug>(nagare-send)"] = "Send reference to agent",
+}
+
+local function map(lhs, plug, modes)
+  if not lhs then
     return
   end
-  fn(args, cmd)
+  for _, mode in ipairs(modes or { "n" }) do
+    -- A <Plug> map the user bound themselves is theirs; leave it. Our own
+    -- earlier binding (a repeated setup) is replaced.
+    local ours = vim.fn.maparg(lhs, mode) == plug
+    if ours or vim.fn.hasmapto(plug, mode) == 0 then
+      vim.keymap.set(mode, lhs, plug, { remap = true, desc = M.descriptions[plug] })
+    end
+  end
 end
 
 local function keymaps()
-  local keys = config.options.keys
-  if not keys then
+  local keys = config.keys
+  if type(keys) ~= "table" then
     return
   end
-  local maps = {
-    { keys.board, M.board, "agents board" },
-    { keys.toggle, M.toggle, "toggle project agent" },
-    { keys.next_waiting, M.next_waiting, "next waiting agent" },
-    { keys.peek, M.peek, "peek most urgent agent" },
-    { keys.new, function()
-      local kinds = vim.tbl_keys(config.options.agents)
-      table.sort(kinds)
-      vim.ui.select(kinds, { prompt = "Agent" }, function(kind)
-        if kind then
-          M.new({ kind = kind })
-        end
-      end)
-    end, "new agent in project" },
-    { keys.project, function()
-      projects.pick()
-    end, "open project" },
-    { keys.worktree, function()
-      M.worktree()
-    end, "new worktree + agent" },
-  }
-  for _, m in ipairs(maps) do
-    if m[1] then
-      vim.keymap.set("n", m[1], m[2], { desc = "nagare: " .. m[3] })
+  map(keys.board, "<Plug>(nagare-board)")
+  map(keys.toggle, "<Plug>(nagare-toggle)")
+  map(keys.next_waiting, "<Plug>(nagare-next)")
+  map(keys.peek, "<Plug>(nagare-peek)")
+  map(keys.new, "<Plug>(nagare-new)")
+  map(keys.worktree, "<Plug>(nagare-worktree)")
+  map(keys.project, "<Plug>(nagare-project)")
+  map(keys.pick, "<Plug>(nagare-pick)")
+  map(keys.send, "<Plug>(nagare-send)", { "n", "x" })
+  if keys.slots and keys.prefix then
+    for n = 1, 9 do
+      local plug = ("<Plug>(nagare-slot-%d)"):format(n)
+      M.descriptions[plug] = "Agent in slot " .. n
+      map(keys.prefix .. n, plug)
     end
   end
-  -- Label the prefix in which-key (LazyVim ships it); v3 has add(), v2
-  -- register().
+  -- which-key (in LazyVim) picks up each desc; the prefix needs a label.
   local ok, wk = pcall(require, "which-key")
-  if ok and keys.prefix then
-    if wk.add then
-      wk.add({ { keys.prefix, group = "agents", icon = { icon = "󱚣 ", color = "orange" } } })
-    elseif wk.register then
-      wk.register({ [keys.prefix] = { name = "+agents" } })
-    end
-  end
-  if keys.send then
-    vim.keymap.set("x", keys.send, ":Nagare send<CR>", { desc = "nagare: send selection reference", silent = true })
-    vim.keymap.set("n", keys.send, "<Cmd>Nagare send<CR>", { desc = "nagare: send line reference" })
+  if ok and keys.prefix and wk.add then
+    wk.add({ { keys.prefix, group = "agents", icon = { icon = "󱚣 ", color = "orange" } } })
   end
 end
 
-M._setup_done = false
+-- Lifecycle -----------------------------------------------------------------
 
+--- Merges options. Optional: the plugin runs on defaults (or vim.g.nagare)
+--- without it. Safe to call again; keymaps follow the new options.
 function M.setup(opts)
   config.setup(opts)
+  if M._initialized then
+    highlights()
+    keymaps()
+  end
+  return M
+end
+
+--- One-time initialisation, scheduled by plugin/nagare.lua. Cheap: no
+--- watcher and no tmux polling start here — they start when first needed.
+function M._init()
+  if M._initialized then
+    return
+  end
+  M._initialized = true
   highlights()
 
   local group = api.nvim_create_augroup("nagare", { clear = true })
@@ -523,44 +571,48 @@ function M.setup(opts)
   api.nvim_create_autocmd({ "BufEnter", "TermEnter" }, {
     group = group,
     callback = function(ev)
-      local agent = agents.from_buf(ev.buf)
+      local agent = agents().from_buf(ev.buf)
       if agent then
-        agents.touch(agent)
+        agents().touch(agent)
       end
     end,
   })
-  api.nvim_create_autocmd("User", {
+  api.nvim_create_autocmd("ModeChanged", {
     group = group,
-    pattern = "NagareStatus",
+    pattern = { "t:nt", "nt:t" },
+    callback = function(ev)
+      agents().track_mode(ev)
+    end,
+  })
+  api.nvim_create_autocmd("VimResized", {
+    group = group,
     callback = function()
-      vim.cmd("redrawstatus!")
+      local board = package.loaded["nagare.board"]
+      if board and board.is_open() then
+        board.render()
+      end
     end,
   })
   api.nvim_create_autocmd("VimLeavePre", {
     group = group,
     callback = function()
-      status.stop()
-      tmux.stop()
+      agents().shutdown()
+      require("nagare.status").stop()
+      require("nagare.tmux").stop()
     end,
   })
 
-  api.nvim_create_user_command("Nagare", command, {
-    nargs = "*",
-    range = true,
-    complete = complete,
-    desc = "nagare: agents across projects",
-  })
-
   keymaps()
-  if config.options.tabline then
+  if config.tabline then
     vim.o.showtabline = 2
     vim.o.tabline = "%!v:lua.require'nagare'.tabline()"
   end
-
-  status.start()
-  tmux.start()
-  M._setup_done = true
-  return M
+  if config.restore then
+    agents().restore()
+  end
+  pcall(function()
+    require("nagare.snacks").register()
+  end)
 end
 
 return M

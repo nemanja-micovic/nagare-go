@@ -81,18 +81,23 @@ require("nagare").setup({
   states_dir = sandbox .. "/states",
   poll_ms = 100,
   on_project_open = false,
+  restore = false,
   notify = { min_seconds = 0 },
 })
+-- The real entry point: :Nagare, the <Plug> maps and the scheduled init.
+vim.cmd("runtime plugin/nagare.lua")
+require("nagare")._init()
 
 local specs = vim.fn.glob(root .. "/tests/nvim/*_spec.lua", false, true)
-local filter = vim.env.TEST_FILTER
+local filter = vim.env.TEST_FILTER -- plain substring
+local pattern = vim.env.TEST_PATTERN -- Lua pattern, e.g. "open: [or]"
 local passed, failed = 0, {}
 
 for _, file in ipairs(specs) do
   local tests = dofile(file)
   for _, t in ipairs(tests) do
     local name = vim.fn.fnamemodify(file, ":t:r") .. " › " .. t[1]
-    if not filter or name:find(filter, 1, true) then
+    if (not filter or name:find(filter, 1, true)) and (not pattern or name:find(pattern)) then
       -- Every test starts from a clean editor and registry.
       pcall(vim.cmd, "silent! tabonly!")
       pcall(vim.cmd, "silent! only!")

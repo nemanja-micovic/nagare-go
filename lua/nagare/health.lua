@@ -1,76 +1,81 @@
 -- :checkhealth nagare
-local config = require("nagare.config")
-
 local M = {}
 
-local health = vim.health
-local start = health.start or health.report_start
-local ok = health.ok or health.report_ok
-local warn = health.warn or health.report_warn
-local info = health.info or health.report_info
-local error = health.error or health.report_error
-
 function M.check()
-  start("nagare")
-  if vim.fn.has("nvim-0.9") == 1 then
-    ok("Neovim " .. tostring(vim.version()))
-  else
-    error("Neovim 0.9 or newer is required")
-  end
+  local h = vim.health
+  local config = require("nagare.config")
 
-  local opts = config.options
-  local found = {}
-  for name, spec in pairs(opts.agents) do
-    if vim.fn.executable(spec.cmd[1]) == 1 then
-      table.insert(found, name)
+  h.start("nagare: editor")
+  if vim.fn.has("nvim-0.10") ~= 1 then
+    h.error("Neovim 0.10 or newer is required")
+    return
+  end
+  h.ok("Neovim " .. tostring(vim.version()))
+  if #config.problems == 0 then
+    h.ok("configuration is valid")
+  else
+    for _, p in ipairs(config.problems) do
+      h.error("config: " .. p)
     end
   end
-  table.sort(found)
-  if #found > 0 then
-    ok("agents installed: " .. table.concat(found, ", "))
-  else
-    warn("no configured agent CLI is in PATH")
-  end
-  if not opts.agents[opts.default_agent] then
-    error(("default_agent %q is not configured"):format(opts.default_agent))
+  local lazy = package.loaded["lazy.core.config"]
+  local spec = lazy and lazy.plugins and (lazy.plugins["nagare"] or lazy.plugins["nagare-go"])
+  if spec and spec.lazy and not spec.event and spec.cmd then
+    h.warn("lazy.nvim loads nagare only on a command: status and notifications start late. Use event = \"VeryLazy\"")
   end
 
-  local bin = opts.tmux.bin
+  h.start("nagare: agents")
+  local found, missing = {}, {}
+  for name, spec_ in pairs(config.agents) do
+    table.insert(vim.fn.executable(spec_.cmd[1]) == 1 and found or missing, name)
+  end
+  table.sort(found)
+  table.sort(missing)
+  if #found > 0 then
+    h.ok("installed: " .. table.concat(found, ", "))
+  else
+    h.warn("no configured agent CLI is in PATH")
+  end
+  if #missing > 0 then
+    h.info("not installed: " .. table.concat(missing, ", "))
+  end
+
+  h.start("nagare: status")
+  local bin = config.tmux.bin
   if vim.fn.executable(bin) == 1 then
-    ok(bin .. " found")
+    h.ok(bin .. " found")
     local settings = vim.fn.expand("~/.claude/settings.json")
     local data = vim.fn.filereadable(settings) == 1 and table.concat(vim.fn.readfile(settings), "\n") or ""
     if data:find("hook-state", 1, true) then
-      ok("status hooks installed (instant status via " .. opts.states_dir .. ")")
+      h.ok("agent hooks installed: status is instant")
     else
-      warn("status hooks not found; run `" .. bin .. " setup` — until then status comes from screen scraping")
+      h.warn("agent hooks not found; run `" .. bin .. " setup`. Until then status comes from reading the screen")
     end
   else
-    warn(bin .. " not in PATH: no hook status (scraping only) and no tmux agents on the board")
+    h.warn(bin .. " not in PATH: status by screen scraping only, and no tmux agents on the board")
   end
-
-  if require("nagare.status").watching() then
-    ok("watching " .. opts.states_dir)
+  local status = require("nagare.status")
+  if status.watching() then
+    h.ok("watching " .. config.states_dir)
   else
-    info("state directory is polled (watcher not running; is setup() called?)")
+    h.info("state watcher starts with the first agent")
+  end
+  if rawget(_G, "Snacks") and Snacks.notifier then
+    h.ok("notifications: snacks notifier — one toast per agent, sticky while waiting; history with <leader>n in LazyVim")
+  else
+    h.info("notifications: vim.notify (install snacks.nvim for persistent, replaceable toasts)")
   end
 
+  h.start("nagare: runtime")
   if vim.fn.executable("tmux") == 1 then
-    ok("tmux found; tmux agents " .. (opts.tmux.enabled and "shown" or "hidden") .. " on the board")
+    h.ok("tmux found; tmux agents " .. (config.tmux.enabled and "shown" or "hidden") .. " on the board")
   else
-    info("tmux not found; only editor agents are shown")
+    h.info("tmux not found; only editor agents are shown")
   end
-
-  local remote = false
-  for _, ui in ipairs(vim.api.nvim_list_uis()) do
-    if ui.chan and ui.chan > 0 then
-      remote = true
-    end
-  end
-  if remote then
-    ok("attached to a persistent runtime; :Nagare detach keeps agents running")
+  if require("nagare").persistent() then
+    h.ok("persistent runtime (" .. vim.env.NAGARE_RUNTIME .. "): :Nagare detach keeps agents running")
   else
-    info("not a persistent runtime: agents end when this Neovim exits (start with `nagare-go nvim` to keep them)")
+    h.info("agents end when this Neovim exits; `nagare-go nvim` starts one that survives detaching")
   end
 end
 

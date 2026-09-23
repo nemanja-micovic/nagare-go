@@ -44,6 +44,7 @@ function M.apply(state)
   end
   local status = hook_states[state.state] or "idle"
   agents.set_status(agent, status, {
+    session_id = (state.session_id and state.session_id ~= "") and state.session_id or agent.session_id,
     event = state.event,
     notification_type = state.notification_type,
     last_message = (state.last_message and state.last_message ~= "") and state.last_message or agent.last_message,
@@ -58,7 +59,7 @@ end
 --- Reads every state file once. Used at start and whenever the watcher is
 --- unavailable.
 function M.scan()
-  local dir = config.options.states_dir
+  local dir = config.states_dir
   local handle = util.uv.fs_scandir(dir)
   if not handle then
     return
@@ -140,50 +141,100 @@ function M.scrape()
 end
 
 local watcher, timer
+local pending = {} -- file name -> debounce timer
 
+local function close(handle)
+  if handle and not handle:is_closing() then
+    handle:close()
+  end
+end
+
+-- One write is several fs events (the temp file, the rename); coalesce them
+-- per file. 30ms keeps a status change feeling instant.
+local function debounce(dir, name)
+  local t = pending[name]
+  if t then
+    t:stop()
+  else
+    t = util.uv.new_timer()
+    pending[name] = t
+  end
+  t:start(30, 0, function()
+    pending[name] = nil
+    close(t)
+    vim.schedule(function()
+      local ok, err = pcall(M.apply, M.read(dir .. "/" .. name))
+      if not ok then
+        vim.notify("nagare: bad state file " .. name .. ": " .. tostring(err), vim.log.levels.DEBUG)
+      end
+    end)
+  end)
+end
+
+local function stop_watcher()
+  if watcher then
+    pcall(watcher.stop, watcher)
+    close(watcher)
+    watcher = nil
+  end
+end
+
+--- Starts watching (idempotent). Called on the first agent spawn: until an
+--- agent exists there is nothing for a state file to change.
 function M.start()
-  M.stop()
-  local dir = config.options.states_dir
+  if timer then
+    return
+  end
+  local dir = config.states_dir
   vim.fn.mkdir(dir, "p")
 
   watcher = util.uv.new_fs_event()
   local ok = watcher and watcher:start(dir, {}, function(err, name)
-    if err or not name or name:sub(-5) ~= ".json" then
+    if err then
+      -- A broken watcher must not keep claiming to watch: drop it and let
+      -- the timer poll instead.
+      vim.schedule(stop_watcher)
       return
     end
-    vim.schedule(function()
-      M.apply(M.read(dir .. "/" .. name))
-    end)
+    if not name then
+      -- luv sometimes reports a change without a name; read everything.
+      vim.schedule(M.scan)
+    elseif name:sub(-5) == ".json" then
+      debounce(dir, name)
+    end
   end)
   if not ok then
-    if watcher then
-      watcher:close()
-    end
-    watcher = nil
+    stop_watcher()
   end
 
   timer = util.uv.new_timer()
-  timer:start(config.options.poll_ms, config.options.poll_ms, vim.schedule_wrap(function()
+  timer:start(config.poll_ms, config.poll_ms, vim.schedule_wrap(function()
     if not watcher then
       M.scan()
     end
-    if config.options.scrape then
+    if config.scrape then
       M.scrape()
     end
   end))
 end
 
 function M.stop()
-  if watcher then
-    watcher:stop()
-    watcher:close()
-    watcher = nil
-  end
+  stop_watcher()
   if timer then
     timer:stop()
-    timer:close()
+    close(timer)
     timer = nil
   end
+  for name, t in pairs(pending) do
+    close(t)
+    pending[name] = nil
+  end
+end
+
+--- Restarts with the current config (tests, or after changing states_dir).
+function M.restart()
+  M.stop()
+  M.start()
 end
 
 function M.watching()

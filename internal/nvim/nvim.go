@@ -157,6 +157,10 @@ func start(bin, sock string) error {
 		}
 	}
 	cmd := exec.Command(bin, "--headless", "--listen", sock)
+	// The plugin reads this to know it is in a persistent runtime; since
+	// Neovim 0.10 the built-in TUI is a remote UI too, so nothing else in
+	// the editor tells the two apart.
+	cmd.Env = append(os.Environ(), "NAGARE_RUNTIME="+sock)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start nvim server: %w", err)

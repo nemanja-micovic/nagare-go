@@ -46,13 +46,13 @@ return {
   { "open: runs on_project_open once, in the new tab, only when asked", function()
     local repo, other = git_repo("hook-open"), git_repo("hook-quiet")
     local calls = {}
-    require("nagare.config").options.on_project_open = function(root)
+    require("nagare.config").set("on_project_open", function(root)
       table.insert(calls, { root = root, cwd = vim.fn.getcwd() })
-    end
+    end)
     projects.open(repo, { explicit = true })
     projects.open(repo, { explicit = true })
     projects.open(other) -- entering a project to show an agent: no picker
-    require("nagare.config").options.on_project_open = false
+    require("nagare.config").set("on_project_open", false)
     eq(calls, { { root = repo, cwd = repo } })
   end },
 
@@ -75,7 +75,7 @@ return {
     fake_agent({ status = "running" })
     eq(comp.cond(), true)
     eq(comp[1](), "● 1 ◐ 1")
-    eq(comp.color().fg, "#db4b4b", "waiting colours the component")
+    eq(comp.color(), "NagareWaiting", "waiting colours the component")
   end },
 
   { "tab_for: a tab cd'd into by hand is adopted", function()
@@ -114,6 +114,20 @@ return {
     eq(l[1].root, "/p", "empty root falls back to the path")
     eq(l[1].source, "tmux")
     truthy(l[1].changed, "timestamp parsed")
+  end },
+
+  { "headless: tab churn with no UI attached does not crash", function()
+    -- A detached `nagare-go nvim` runtime has no UI. Neovim 0.11 segfaults on
+    -- a later buffer creation once :redrawtabline has run in that state, so
+    -- util.redraw must skip it. This sequence crashed the editor before.
+    eq(#api.nvim_list_uis(), 0, "tests run headless")
+    local a, b = git_repo("churn-a"), git_repo("churn-b")
+    projects.open(a)
+    projects.open(b)
+    projects.open(a)
+    vim.cmd("silent! tabonly!")
+    vim.cmd("enew!")
+    vim.cmd("enew!")
   end },
 
   { "util.parse_time reads the Go side's UTC timestamps", function()

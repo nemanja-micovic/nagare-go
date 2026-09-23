@@ -15,7 +15,7 @@ local function in_tmux()
 end
 
 function M.available()
-  local opts = config.options.tmux
+  local opts = config.tmux
   return opts.enabled and vim.fn.executable(opts.bin) == 1 and vim.fn.executable("tmux") == 1
 end
 
@@ -53,7 +53,7 @@ function M.refresh()
     return
   end
   local chunks = {}
-  vim.fn.jobstart({ config.options.tmux.bin, "ls" }, {
+  vim.fn.jobstart({ config.tmux.bin, "ls" }, {
     stdout_buffered = true,
     on_stdout = function(_, data)
       chunks = data
@@ -69,21 +69,22 @@ function M.refresh()
         end
         last_raw = raw
         M.list = M.parse(raw)
-        vim.cmd("redrawtabline")
+        require("nagare.util").redraw()
         pcall(vim.api.nvim_exec_autocmds, "User", { pattern = "NagareStatus", modeline = false, data = { source = "tmux" } })
       end)
     end,
   })
 end
 
+--- Starts polling (idempotent). Called the first time anything asks for
+--- the agent list, so an editor that never looks pays nothing.
 function M.start()
-  M.stop()
-  if not M.available() then
+  if timer or not M.available() then
     return
   end
   M.refresh()
   timer = util.uv.new_timer()
-  timer:start(config.options.tmux.poll_ms, config.options.tmux.poll_ms, vim.schedule_wrap(M.refresh))
+  timer:start(config.tmux.poll_ms, config.tmux.poll_ms, vim.schedule_wrap(M.refresh))
 end
 
 function M.stop()

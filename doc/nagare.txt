@@ -13,7 +13,10 @@ SETUP                                                        *nagare-setup*
 
 >lua
     require("nagare").setup({ projects = { "~/code/*" } })
+    -- or, without calling anything:
+    vim.g.nagare = { projects = { "~/code/*" } }
 <
+setup() is optional; the plugin runs on defaults. Requires Neovim 0.10+.
 Run `nagare-go setup` once so agents report status through hooks (instant);
 without it status comes from reading the agent's screen. `nagare-go nvim`
 starts a persistent editor that keeps agents alive after the terminal closes.
@@ -23,6 +26,9 @@ Check everything with |:checkhealth| nagare.
 COMMANDS                                                     *:Nagare*
 
 :Nagare [board]              Open the board.
+:Nagare pick                 Fuzzy agent picker (snacks, with live preview).
+:Nagare slot {n}             Jump to the agent in slot {n}.
+:Nagare resume               Resume the agent whose terminal you are in.
 :Nagare new [agent] [dir]    Start an agent in the current project (or dir).
 :Nagare worktree {name} [agent]
                              New git worktree + branch {name} under
@@ -40,20 +46,42 @@ MAPPINGS                                                     *nagare-mappings*
 
 <leader>jj board       <leader>jw next waiting    <leader>jp peek
 <leader>ja toggle      <leader>jn new agent       <leader>jt worktree
-<leader>jo project     <leader>js send reference
+<leader>jo project     <leader>js send reference  <leader>jf find agent
+<leader>j1..9          agent in that slot
 <C-q>      in an agent terminal: back to code, or close the peek
 
 Board: <CR> jump  p peek  a new  A pick agent  w worktree  y approve
-       Y approve always  x kill/remove  r rename  n next  o project
-       R refresh  q close
+       Y approve always  c resume  x kill/forget  r rename  n next
+       o project  R refresh  1-9 slot  g? help  q close
+Picker: <C-y> approve  <C-o> peek  <C-x> kill/forget
 
-Change them under `keys` in setup(); `keys = false` disables all.
+Every key maps to a <Plug> name: <Plug>(nagare-board), (nagare-pick),
+(nagare-next), (nagare-slot-N), (nagare-peek), (nagare-toggle),
+(nagare-new), (nagare-worktree), (nagare-project), (nagare-send).
+Bind one yourself and the default is not added. Change the defaults under
+`keys`; `keys = false` adds none.
+
+==============================================================================
+NOTIFICATIONS                                            *nagare-notifications*
+
+One toast per agent. "Needs you" stays until the agent is answered, from
+anywhere, then hides itself; "finished" replaces it rather than stacking.
+Built for snacks.nvim's notifier (LazyVim), which keeps them in its history
+(<leader>n). Plain vim.notify otherwise.
+
+==============================================================================
+RESTORE                                                        *nagare-restore*
+
+Agents are recorded in stdpath("data")/nagare/agents.json. After a restart
+they return to the board as saved rows (◌); jumping to one resumes its session
+(claude --resume <id>, codex resume <id>, ...). Nothing starts until you ask.
+Disable with `restore = false`.
 
 ==============================================================================
 API                                                          *nagare-api*
 
 require("nagare").statusline()   statusline string, e.g. "● 2 ◐ 1"
-require("nagare").lualine()      lualine component
+require("nagare").lualine()      lualine component (or lualine_x = { "nagare" })
 require("nagare").tabline()      tabline with status dots (or `tabline = true`)
 require("nagare").summary()      { waiting_input =, running =, idle =, dead = }
 require("nagare").entries()      every agent, editor and tmux
@@ -61,7 +89,9 @@ require("nagare").entries()      every agent, editor and tmux
 User autocmd `NagareStatus` fires on every status change, with data
 { id, key, status, prev }.
 
-Highlights: NagareWaiting NagareRunning NagareIdle NagareDead NagareProject
-NagareDim NagareBorder NagareTitle NagareTmux NagareAgent_{agent}
+Highlights (linked to Diagnostic* and float groups by default):
+NagareWaiting NagareRunning NagareIdle NagareDead NagareSaved NagareProject
+NagareDim NagareNormal NagareBorder NagareTitle NagareKey NagareSlot
+NagareTmux NagareAgent_{agent}
 
  vim:tw=78:ts=8:ft=help:norl:
