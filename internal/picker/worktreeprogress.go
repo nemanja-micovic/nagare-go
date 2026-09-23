@@ -76,6 +76,16 @@ func newSpinner() spinner.Model {
 // Errors are shown rather than only logged. A failure like "worktree already
 // exists" used to be indistinguishable from nothing happening at all.
 func (m Model) statusLine() string {
+	if msg := m.statusMessage(); msg != "" {
+		return msg
+	}
+	return m.searchInput.View()
+}
+
+// statusMessage is the transient line — progress, a note, an error — or "" when
+// there is nothing to say. Focus mode shows it alone, since its sidebar has no
+// search box for it to replace.
+func (m Model) statusMessage() string {
 	c := theme.Current().Colors
 
 	if m.pending != nil {
@@ -92,5 +102,5 @@ func (m Model) statusLine() string {
 		// color already carry the signal.
 		return " " + lipgloss.NewStyle().Foreground(c.Error).Bold(true).Render("✗ "+m.statusErr)
 	}
-	return m.searchInput.View()
+	return ""
 }

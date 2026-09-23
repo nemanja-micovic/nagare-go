@@ -18,7 +18,16 @@ type (
 	mouseDismissMsg struct{}
 	// mouseScrollMsg moves the cursor by delta rows.
 	mouseScrollMsg struct{ delta int }
+	// mouseFocusMsg focuses a session, from a click in focus mode's sidebar.
+	mouseFocusMsg struct{ index int }
+	// mouseTermScrollMsg scrolls the focused terminal by delta rows (positive
+	// is back into history).
+	mouseTermScrollMsg struct{ delta int }
 )
+
+// termScrollStep is how many rows a wheel notch scrolls a focused terminal —
+// the three most terminals use.
+const termScrollStep = 3
 
 // hitTargets records where things were drawn, so a click can be resolved back
 // to what the user actually clicked on.
@@ -43,6 +52,10 @@ type hitTargets struct {
 	// decisions — remove this worktree, send this prompt — are not dismissed by
 	// a stray click; they want a deliberate answer.
 	dismissable bool
+	// focus is set in focus mode, where the sidebar and terminal take over.
+	focus bool
+	// term bounds the focused terminal panel.
+	term image.Rectangle
 }
 
 type cardHit struct {
@@ -60,6 +73,20 @@ func (h hitTargets) resolve(msg tea.MouseMsg, cursor int) tea.Msg {
 
 	switch msg.(type) {
 	case tea.MouseWheelMsg:
+		if h.focus {
+			// The wheel scrolls what it is over. Over the terminal that is the
+			// agent's history; the sidebar is short enough not to need it, and
+			// switching agents on a wheel notch would be far too easy to do.
+			if h.dialog.Empty() && image.Pt(mouse.X, mouse.Y).In(h.term) {
+				switch mouse.Button {
+				case tea.MouseWheelUp:
+					return mouseTermScrollMsg{delta: termScrollStep}
+				case tea.MouseWheelDown:
+					return mouseTermScrollMsg{delta: -termScrollStep}
+				}
+			}
+			return nil
+		}
 		switch mouse.Button {
 		case tea.MouseWheelUp:
 			return mouseScrollMsg{delta: -1}
@@ -84,6 +111,18 @@ func (h hitTargets) resolveClick(x, y, cursor int) tea.Msg {
 	if !h.dialog.Empty() {
 		if h.dismissable && !image.Pt(x, y).In(h.dialog) {
 			return mouseDismissMsg{}
+		}
+		return nil
+	}
+
+	// In focus mode one click on another agent switches to it. The list's
+	// select-then-activate guard exists because activating used to leave nagare;
+	// switching focus leaves nothing and is undone by clicking back.
+	if h.focus {
+		if x < h.listWidth {
+			if idx, ok := h.sessionAt[y]; ok {
+				return mouseFocusMsg{index: idx}
+			}
 		}
 		return nil
 	}

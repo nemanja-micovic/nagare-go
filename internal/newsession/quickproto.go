@@ -13,12 +13,14 @@ import (
 
 // QuickModel is the quick-prototype form (name + agent only).
 type QuickModel struct {
-	form   *huh.Form
-	state  *formState
-	width  int
-	height int
-	err    error
-	done   bool
+	form    *huh.Form
+	state   *formState
+	width   int
+	height  int
+	err     error
+	done    bool
+	stay    bool   // hand the session back instead of switching to it
+	created string // tmux session the form created, once it has
 }
 
 // NewQuick creates a quick-prototype form model.
@@ -81,7 +83,10 @@ func (m QuickModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		session.SwitchToSession(sessionName)
+		m.created = sessionName
+		if !m.stay {
+			session.SwitchToSession(sessionName)
+		}
 		return m, tea.Quit
 	}
 
@@ -116,4 +121,16 @@ func (m QuickModel) view() string {
 		Render(title + "\n\n" + body)
 
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// Stay makes the form hand the new session back through Created rather than
+// switching the terminal to it — for when nagare will open it itself.
+func (m QuickModel) Stay() QuickModel {
+	m.stay = true
+	return m
+}
+
+// Created returns the tmux session the form created, or "" if it was cancelled.
+func (m QuickModel) Created() string {
+	return m.created
 }

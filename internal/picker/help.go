@@ -35,6 +35,8 @@ func hintsFor(m Model) []hint {
 		return []hint{{"Enter", "Save name"}, {"Esc", "Cancel"}}
 	case m.worktreeMode:
 		return []hint{{"Enter", "Create worktree"}, {"Esc", "Cancel"}}
+	case m.focus.on:
+		return focusHints(m)
 	}
 
 	hints := []hint{}
@@ -42,10 +44,13 @@ func hintsFor(m Model) []hint {
 	saved := ok && s.Status == models.StatusSaved
 
 	if ok {
-		if saved {
+		switch {
+		case saved:
 			hints = append(hints, hint{"Enter", "Load"})
-		} else {
+		case m.enterJumps:
 			hints = append(hints, hint{"Enter", "Jump"})
+		default:
+			hints = append(hints, hint{"Enter", "Open"})
 		}
 	}
 	hints = append(hints, hint{"↑/↓", "Navigate"})
@@ -87,8 +92,42 @@ func hintsFor(m Model) []hint {
 	if ok {
 		hints = append(hints, hint{"F3", "Worktree"})
 	}
+	if ok && !saved && !m.enterJumps {
+		hints = append(hints, hint{"F5", "tmux"})
+	}
 	hints = append(hints, hint{"^n", "New"}, hint{"^f", "Star"}, hint{"^o", "Sort"})
 
+	return hints
+}
+
+// focusHints are focus mode's footer. Everything not listed goes to the agent,
+// so the footer is also the complete list of what nagare keeps for itself.
+func focusHints(m Model) []hint {
+	hints := []hint{{keyLabel(m.leaveKeyOrDefault(), true), "Sessions"}}
+	// The queue leads here too, and louder: the user is heads-down in one agent,
+	// and this is how they learn another one is blocked on them.
+	if n := waitingCount(m.filtered); n > 0 {
+		if s, ok := m.focusedSession(); !ok || s.Status != models.StatusWaitingInput || n > 1 {
+			hints = append(hints, hint{"F4", fmt.Sprintf("%d waiting", n)})
+		}
+	}
+	hints = append(hints, hint{"Alt ↑/↓", "Switch"})
+	if m.focus.shell {
+		hints = append(hints, hint{"Alt+s", "Agent"})
+	} else {
+		hints = append(hints, hint{"Alt+s", "Shell"})
+	}
+	if m.focus.scroll > 0 {
+		hints = append(hints, hint{"⇧PgDn", "Live"})
+	} else {
+		hints = append(hints, hint{"⇧PgUp", "Scroll"})
+	}
+	if m.focus.zoom {
+		hints = append(hints, hint{"Alt+z", "Sidebar"})
+	} else {
+		hints = append(hints, hint{"Alt+z", "Zoom"})
+	}
+	hints = append(hints, hint{"F5", "tmux"})
 	return hints
 }
 
@@ -102,16 +141,28 @@ func helpBar(m Model, width int) string {
 	sep := lipgloss.NewStyle().Foreground(c.Muted).Render(" │ ")
 	sepWidth := lipgloss.Width(sep)
 
+	urgent := lipgloss.NewStyle().Foreground(c.Warning).Bold(true)
 	render := func(h hint) string {
+		// The waiting queue is the one hint worth colouring: it is news, where
+		// every other hint is a reminder.
+		if h.key == "F4" && m.focus.on {
+			return urgent.Render(h.key + " " + h.label)
+		}
 		return keyStyle.Render(h.key) + " " + mutedStyle().Render(h.label)
 	}
 
 	tail := []hint{{"F1", "More"}, {"Esc", "Quit"}}
-	if m.showHelp || m.showThemePick || m.confirmMode || m.promptMode ||
-		m.renameMode || m.worktreeMode {
+	switch {
+	case m.showHelp || m.showThemePick || m.confirmMode || m.promptMode ||
+		m.renameMode || m.worktreeMode:
 		// A mode's own footer already names its exit; "More"/"Quit" would be
 		// wrong there, since F1 and Esc mean something else.
 		tail = nil
+	case m.focus.on:
+		// Esc belongs to the agent in focus mode — it is how Claude Code is
+		// interrupted — so advertising it as Quit would be a lie. ^] is the way
+		// out, and it leads the hints.
+		tail = []hint{{"F1", "More"}}
 	}
 
 	var tailParts []string
@@ -159,30 +210,31 @@ type helpSection struct {
 // helpColumns splits the bindings into two groups of roughly equal height, so the
 // screen can be laid out side by side. Actions is on its own because it is longer
 // than everything else combined.
-func helpColumns() ([]helpSection, []helpSection) {
+func helpColumns(leave string) ([]helpSection, []helpSection) {
 	left := []helpSection{
 		{"Navigation", [][2]string{
 			{"↑ / ↓", "Move cursor up/down"},
 			{"← / →", "Move cursor (grid view)"},
-			{"Enter", "Jump to selection"},
+			{"Enter", "Open agent in nagare"},
+			{"F5", "Open in tmux instead"},
 			{"F4", "Next session waiting on you"},
 			{"Esc", "Quit nagare"},
+		}},
+		{"Focus mode", [][2]string{
+			{"Keys", "Go straight to the agent"},
+			{leave, "Back to the session list"},
+			{"Alt+↑/↓", "Previous / next agent"},
+			{"Alt+s", "Shell in the agent's directory"},
+			{"F4", "Next agent waiting on you"},
+			{"Shift+PgUp", "Scroll back (PgDn: forward)"},
+			{"Alt+z", "Zoom: hide the sidebar"},
+			{"F5", "Open in tmux (detach: back)"},
 		}},
 		{"Views", [][2]string{
 			{"Tab", "Toggle list / grid view"},
 			{"Ctrl+t", "Pick a color theme"},
 			{"Ctrl+s", "Show saved sessions"},
 			{"F1", "Toggle this screen"},
-		}},
-		{"Search", [][2]string{
-			{"Type", "Fuzzy match name or path"},
-			{"", "Best match is auto-selected"},
-		}},
-		{"Mouse", [][2]string{
-			{"Click", "Select; click again to jump"},
-			{"Wheel", "Move the selection"},
-			{"Click away", "Close this screen"},
-			{"", "Off: picker.mouse = false"},
 		}},
 	}
 	right := []helpSection{
@@ -205,6 +257,12 @@ func helpColumns() ([]helpSection, []helpSection) {
 			{"Ctrl+x", "Kill window"},
 			{"", "Offers worktree removal"},
 		}},
+		{"Search & mouse", [][2]string{
+			{"Type", "Fuzzy match name or path"},
+			{"Click", "Select; again to open"},
+			{"Wheel", "Move / scroll the agent"},
+			{"", "Off: picker.mouse = false"},
+		}},
 		{"Config", [][2]string{
 			{"Ctrl+e", "Edit config file"},
 		}},
@@ -220,6 +278,11 @@ func helpColumns() ([]helpSection, []helpSection) {
 // dialog's centered position clamps to the top of the frame, it also defeated the
 // entry animation.
 func helpOverlay(width, height int) string {
+	return helpOverlayFor(width, height, keyLabel(keyFocusLeave, false))
+}
+
+// helpOverlayFor is helpOverlay naming leave as the key that ends focus mode.
+func helpOverlayFor(width, height int, leave string) string {
 	c := theme.Current().Colors
 
 	// Dialog width, then the content width inside border (2) and padding (2*3).
@@ -252,7 +315,7 @@ func helpOverlay(width, height int) string {
 		return lipgloss.NewStyle().Width(colWidth).Render(strings.Join(out, "\n"))
 	}
 
-	left, right := helpColumns()
+	left, right := helpColumns(leave)
 
 	var body string
 	if columns == 2 {

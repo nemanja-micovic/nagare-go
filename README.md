@@ -9,6 +9,8 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 
 ## Features
 
+- **Focus Mode** — open any agent's live terminal *inside* nagare and work with it directly, with every other agent in a sidebar beside it; no more jumping out to tmux and back
+- **Companion Shell** — Alt+s opens a shell in the focused agent's directory, still inside nagare
 - **Session Picker** — fuzzy search, list/grid views, live tmux preview
 - **Real-time Status** — hooks, plugins, and extensions detect agent state (idle/working/waiting/dead)
 - **Worktree Aware** — panes in different git worktrees of one repo show their own path, branch, and name
@@ -78,12 +80,61 @@ nagare-go setup        # install status reporting + MCP server + slash commands
 nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 ```
 
+## Working inside nagare
+
+Press **Enter** on a session and nagare opens its terminal in place of the
+preview — the agent's real screen, live, with the session list alongside as a
+sidebar. Everything you type goes to the agent: answer a permission prompt, send
+the next instruction, interrupt it with Esc. When another agent needs you, its
+dot turns red in the sidebar and the footer says so; **F4** takes you there.
+
+```
+╭────────────────────────╮╭─ ● api / token-retry · Claude Code · needs you ────────────────────╮
+│                        ││ ⏺ Update(internal/auth/refresh.go)                                 │
+│  3 agents    ● 1  ● 1  ││   ⎿  Updated with 12 additions and 3 removals                      │
+│                        ││                                                                    │
+│  api       2 sessions  ││ ⏺ I'll run the auth tests to check the retry loop.                 │
+│  ● ├ C token-retry     ││                                                                    │
+│  ● └ C clau…   master  ││                                                                    │
+│                        ││ ⏺ Bash(go test ./internal/auth/...)                                │
+│  web        1 session  ││                                                                    │
+│  ● └ C claude          ││ ╭──────────────────────────────────────────────╮                   │
+│                        ││ │ Bash command                                 │                   │
+│                        ││ │   go test ./internal/auth/...                │                   │
+│                        ││ │ Do you want to proceed?                      │                   │
+│                        ││ │ ❯ 1. Yes                                     │                   │
+│                        ││ │   2. Yes, and don't ask again                │                   │
+│                        ││ │   3. No, and tell Claude what to do (esc)    │                   │
+│                        ││ ╰──────────────────────────────────────────────╯                   │
+│                        ││                                                                    │
+╰────────────────────────╯╰────────────────────────────────────────────────────────────────────╯
+ ^] Sessions │ Alt ↑/↓ Switch │ Alt+s Shell │ ⇧PgUp Scroll │ Alt+z Zoom │ F5 tmux │ F1 More
+```
+
+tmux still runs every agent, so they keep working when nagare closes — but nagare
+no longer needs to run *inside* tmux. Start it from any terminal.
+
+| Key (focus mode) | Action |
+|-----|--------|
+| *anything else* | goes to the agent |
+| Ctrl+] | back to the session list (`picker.focus_leave_key`) |
+| Alt+↑ / Alt+↓ | previous / next agent |
+| F4 | next agent waiting on you |
+| Alt+s | shell in the agent's directory (again: back to the agent) |
+| Shift+PgUp / PgDn | scroll back through the agent's history (the wheel works too) |
+| Alt+z | zoom: hide the sidebar |
+| F5 | open the agent in tmux itself; outside tmux, detaching returns to nagare |
+
+Prefer the old behaviour, where Enter switches to the session in tmux? Set
+`enter_action = "jump"` under `[picker]`.
+
 ## Picker Keybindings
 
 | Key | Action |
 |-----|--------|
 | Type | Fuzzy search |
-| Enter | Jump to session |
+| Enter | Open the agent in nagare (focus mode) |
+| F5 | Open the agent in tmux instead |
 | Esc | Quit |
 | Tab | Toggle list/grid |
 | Ctrl+y/a | Approve permission |
@@ -120,6 +171,10 @@ min_working_seconds = 30
 
 [picker]
 show_help_bar = true
+enter_action = "focus"       # "jump" switches to the session in tmux instead
+focus_leave_key = "ctrl+]"   # e.g. "ctrl+q" where Ctrl+] is awkward to type
+mouse = true
+animations = true
 
 [appearance]
 theme = "tokyonight"

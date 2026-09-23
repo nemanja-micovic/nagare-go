@@ -1,6 +1,7 @@
 package picker
 
 import (
+	"cmp"
 	"fmt"
 	"image"
 	"os"
@@ -66,53 +67,61 @@ type Result struct {
 
 // Model is the main Bubble Tea model for the picker TUI.
 type Model struct {
-	sessions      []models.Session
-	filtered      []models.Session
-	cursor        int
-	viewMode      ViewMode
-	sortMode      SortMode
-	preview       string
-	width         int
-	height        int
-	statesDir     string
-	searchInput   textinput.Model
-	showHelp      bool              // F1 help overlay
-	showHelpBar   bool              // bottom hint bar
-	showThemePick bool              // Ctrl+t theme picker overlay
-	themeNames    []string          // cached sorted theme names
-	themeCursor   int               // cursor in theme picker
-	themeOriginal string            // theme before opening picker (for cancel)
-	showSaved     bool              // show saved (unloaded) sessions
-	gridPreviews  map[string]string // cached grid cell previews keyed by pane target
-	registry      *state.Registry
-	renameMode    bool
-	renameSession models.Session
-	worktreeMode  bool
-	worktreeOn    models.Session
-	confirmMode   bool
-	confirmOn     models.Session
-	pending       *pendingWorktree // worktree being created, nil when idle
-	spinner       spinner.Model
-	statusErr     string              // last failure, shown until the next keypress
-	statusNote    string              // neutral message, shown until the next keypress
-	workCache     map[string]git.Work // outstanding work per path, refreshed each scan
-	result        Result
-	promptMode    bool
-	promptTarget  models.Session
-	promptInput   textinput.Model
-	lastQuery     string   // previous search query, to detect query changes in applyFilter
-	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
-	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
-	animEnabled   bool     // spring-animated overlay entry (config: picker.animations)
-	overlayAnim   overlayAnim
-	breath        float64                         // phase of the status-dot breath, 0..1
-	breathOn      bool                            // whether the breath clock is currently ticking
-	slide         selectionSlide                  // highlight crossfading between rows
-	arrived       string                          // worktree whose pane just appeared, to flash once it is listed
-	history       map[string][]uint8              // recent activity levels per session, for sparklines
-	flashes       map[string]flashState           // rows fading after a state change
-	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
-	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
+	sessions       []models.Session
+	filtered       []models.Session
+	cursor         int
+	viewMode       ViewMode
+	sortMode       SortMode
+	preview        string
+	width          int
+	height         int
+	statesDir      string
+	searchInput    textinput.Model
+	showHelp       bool              // F1 help overlay
+	showHelpBar    bool              // bottom hint bar
+	showThemePick  bool              // Ctrl+t theme picker overlay
+	themeNames     []string          // cached sorted theme names
+	themeCursor    int               // cursor in theme picker
+	themeOriginal  string            // theme before opening picker (for cancel)
+	showSaved      bool              // show saved (unloaded) sessions
+	gridPreviews   map[string]string // cached grid cell previews keyed by pane target
+	registry       *state.Registry
+	renameMode     bool
+	renameSession  models.Session
+	worktreeMode   bool
+	worktreeOn     models.Session
+	confirmMode    bool
+	confirmOn      models.Session
+	pending        *pendingWorktree // worktree being created, nil when idle
+	spinner        spinner.Model
+	statusErr      string              // last failure, shown until the next keypress
+	statusNote     string              // neutral message, shown until the next keypress
+	workCache      map[string]git.Work // outstanding work per path, refreshed each scan
+	result         Result
+	promptMode     bool
+	promptTarget   models.Session
+	promptInput    textinput.Model
+	lastQuery      string   // previous search query, to detect query changes in applyFilter
+	gridOrder      []string // frozen display order for grid view (session keys); nil = not yet snapshotted
+	mouseEnabled   bool     // click-to-select and wheel scrolling (config: picker.mouse)
+	animEnabled    bool     // spring-animated overlay entry (config: picker.animations)
+	overlayAnim    overlayAnim
+	breath         float64                         // phase of the status-dot breath, 0..1
+	breathOn       bool                            // whether the breath clock is currently ticking
+	slide          selectionSlide                  // highlight crossfading between rows
+	arrived        string                          // worktree whose pane just appeared, to flash once it is listed
+	history        map[string][]uint8              // recent activity levels per session, for sparklines
+	flashes        map[string]flashState           // rows fading after a state change
+	prevStatus     map[string]models.SessionStatus // statuses at the last scan, to spot transitions
+	testNoScan     bool                            // test hook: disable the live tmux scanner (see export_test.go)
+	focus          focusState                      // the agent terminal hosted in nagare (focus.go)
+	enterJumps     bool                            // Enter switches to tmux instead of focusing (picker.enter_action)
+	pendingFocus   string                          // tmux session to focus once an agent appears in it
+	pendingFocusBy time.Time                       // when to stop waiting for pendingFocus
+	leaveKey       string                          // returns from focus mode (picker.focus_leave_key)
+	newQueue       func() *tmux.Queue              // where focus mode's tmux commands go; faked in tests
+	filterGen      int                             // bumped whenever filtered is rebuilt
+	sidebarCache   *sidebarCache                   // focus mode's last sidebar render
 }
 
 // New creates a new picker model with default settings.
@@ -137,6 +146,7 @@ func New() Model {
 		showHelpBar:  cfg.Picker.ShowHelpBar,
 		mouseEnabled: cfg.Picker.Mouse,
 		animEnabled:  cfg.Picker.Animations,
+		enterJumps:   cfg.Picker.EnterAction == config.EnterJump,
 		overlayAnim:  newOverlayAnim(),
 		registry:     state.NewRegistry(state.DefaultRegistryPath()),
 		promptInput:  pi,
@@ -145,6 +155,9 @@ func New() Model {
 		history:      make(map[string][]uint8),
 		prevStatus:   make(map[string]models.SessionStatus),
 		spinner:      newSpinner(),
+		sidebarCache: &sidebarCache{},
+		newQueue:     tmux.NewQueue,
+		leaveKey:     cmp.Or(cfg.Picker.FocusLeaveKey, keyFocusLeave),
 	}
 }
 
@@ -174,6 +187,9 @@ func (m Model) activateSelected() (tea.Model, tea.Cmd) {
 	s, ok := m.selectedSession()
 	if !ok {
 		return m, nil
+	}
+	if !m.enterJumps {
+		return m.enterFocus(s)
 	}
 	if s.Status == models.StatusSaved {
 		agent := string(s.AgentType)
@@ -304,6 +320,8 @@ func (m Model) Init() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(
+		// Windows a crashed run left fitted to its own size go back to tmux.
+		func() tea.Msg { tmux.ReleaseStaleWindows(); return nil },
 		doScan(m.statesDir),
 		doPreviewTick(),
 		doBreathTick(),
@@ -315,7 +333,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// A focused agent is resized with nagare, so it keeps drawing for exactly
+		// the space it is shown in.
+		m.fitFocus(false)
 		return m, nil
+
+	case focusTickMsg, focusSnapMsg, attachDoneMsg:
+		return m.updateFocus(msg)
+
+	case tea.PasteMsg:
+		switch {
+		case m.focus.on && !m.overlayOpen():
+			return m.pasteFocus(msg.Content)
+		case m.promptMode:
+			var cmd tea.Cmd
+			m.promptInput, cmd = m.promptInput.Update(msg)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		if !m.renameMode && !m.worktreeMode {
+			m.applyFilter()
+		}
+		return m, cmd
+
+	case mouseFocusMsg:
+		if msg.index < 0 || msg.index >= len(m.filtered) {
+			return m, nil
+		}
+		m.cursor = msg.index
+		return m.enterFocus(m.filtered[msg.index])
+
+	case mouseTermScrollMsg:
+		if !m.focus.on {
+			return m, nil
+		}
+		return m.scrollFocus(msg.delta)
 
 	case mouseSelectMsg:
 		if msg.index < 0 || msg.index >= len(m.filtered) {
@@ -412,11 +465,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		recordActivity(m.history, m.sessions)
 		// A worktree that has just come up flashes like any other arrival worth
 		// noticing, reusing the same fade rather than inventing a second one.
+		var opened *models.Session
 		if m.arrived != "" {
 			for _, sess := range m.sessions {
 				if sess.Details.Worktree == m.arrived {
 					m.flashes[sessionKey(sess)] = flashState{kind: flashDone, level: 1}
 					m.arrived = ""
+					opened = &sess
 					break
 				}
 			}
@@ -424,17 +479,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
+		// The sidebar's selection is the focused agent, wherever the re-sort put it.
+		if m.focus.on {
+			m.selectKey(m.focus.key)
+		}
+		var focusCmd tea.Cmd
+		m, focusCmd = m.resolvePendingFocus()
+		// A worktree the user just asked for opens like a new session does:
+		// they made it to work in it.
+		if opened != nil && !m.enterJumps {
+			m, focusCmd = m.enterFocus(*opened)
+		}
 		if m.testNoScan {
-			return m, nil
+			return m, focusCmd
 		}
 		next := tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
 		// The clock stops itself when nothing is moving, so a scan that turns up
 		// activity — or starts a flash — has to start it again.
 		if !m.breathOn && (needsBreathing(m.filtered) || len(m.flashes) > 0) {
 			m.breathOn = true
-			return m, tea.Batch(next, doBreathTick())
+			return m, tea.Batch(next, doBreathTick(), focusCmd)
 		}
-		return m, next
+		return m, tea.Batch(next, focusCmd)
 
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
@@ -448,6 +514,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, doScan(m.statesDir)
 
 	case tickPreviewMsg:
+		if m.focus.on {
+			// The focus loop is already capturing the one pane on screen; keep
+			// the preview clock alive, idle, for when the list comes back.
+			return m, doPreviewTick()
+		}
 		return m, m.doPreview()
 
 	case tickBreathMsg:
@@ -540,6 +611,7 @@ func (m Model) View() tea.View {
 	content = clampHeight(content, m.height)
 	v := tea.NewView(content)
 	v.AltScreen = true
+	v.Cursor = m.focusCursor()
 
 	if m.mouseEnabled {
 		// Cell motion, not all motion: it covers clicks, releases and the wheel
@@ -607,7 +679,9 @@ func (m Model) view() (string, hitTargets) {
 	}
 
 	var base string
-	if m.viewMode == GridView {
+	if m.focus.on {
+		base, hits = m.viewFocus()
+	} else if m.viewMode == GridView {
 		base, hits.cards = m.viewGrid(m.width, contentHeight)
 	} else {
 		leftOuter := m.width / 5
@@ -630,7 +704,7 @@ func (m Model) view() (string, hitTargets) {
 	overlay, dismissable := "", false
 	switch {
 	case m.showHelp:
-		overlay, dismissable = helpOverlay(m.width, m.height), true
+		overlay, dismissable = helpOverlayFor(m.width, m.height, keyLabel(m.leaveKeyOrDefault(), false)), true
 	case m.showThemePick:
 		overlay, dismissable = themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height), true
 	case m.promptMode:
@@ -723,6 +797,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Prompt mode intercepts keys
 	if m.promptMode {
 		return m.handlePromptKey(msg)
+	}
+
+	// Focus mode hands the keyboard to the agent, bar a few chords of its own.
+	if m.focus.on {
+		return m.handleFocusKey(msg)
 	}
 
 	switch key {
@@ -915,6 +994,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyNextAttention:
 		return m.jumpToNextAttention()
+	case keyJumpTmux:
+		return m.jumpToTmux()
 	case keyEditConfig:
 		return m, m.openConfigEditor()
 	default:
@@ -1055,11 +1136,11 @@ func sendPromptToPane(s models.Session, text string) {
 	for i, line := range lines {
 		if i < len(lines)-1 {
 			// Intermediate lines: send text then Enter separately
-			tmux.RunTmux("send-keys", "-t", target, line, "")
+			tmux.RunTmux("send-keys", "-t", target, tmux.Arg(line), "")
 			tmux.RunTmux("send-keys", "-t", target, "Enter", "")
 		} else {
 			// Last line: send with Enter to execute
-			tmux.RunTmux("send-keys", "-t", target, line, "Enter")
+			tmux.RunTmux("send-keys", "-t", target, tmux.Arg(line), "Enter")
 		}
 	}
 }
@@ -1200,6 +1281,7 @@ func (m *Model) countSaved() int {
 // --- Filtering & sorting ---
 
 func (m *Model) applyFilter() {
+	m.filterGen++
 	// Remember which session the cursor points at so we can restore the
 	// selection after rebuilding the filtered list. Without this, a background
 	// scan (every 2s) re-sorts and the cursor index silently slides onto a
@@ -1403,9 +1485,43 @@ func (m Model) renderStats(live, waiting, running, saved int) string {
 	return " " + strings.Join(parts, sep)
 }
 
+// sidebarStats is renderStats for focus mode's narrow sidebar, where the full
+// sentence wraps onto a second row. Counts become dots in the status colours —
+// the same dots the rows below carry — so they read without a legend.
+func sidebarStats(live, waiting, running, width int) string {
+	c := theme.Current().Colors
+	noun := "agents"
+	if live == 1 {
+		noun = "agent"
+	}
+	left := lipgloss.NewStyle().Foreground(c.Foreground).Render(fmt.Sprintf("%d %s", live, noun))
+	var right []string
+	if waiting > 0 {
+		right = append(right, lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(models.StatusWaitingInput))).
+			Render(fmt.Sprintf("● %d", waiting)))
+	}
+	if running > 0 {
+		right = append(right, lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(models.StatusRunning))).
+			Render(fmt.Sprintf("● %d", running)))
+	}
+	r := strings.Join(right, "  ")
+	gap := width - 1 - lipgloss.Width(left) - lipgloss.Width(r) - rowGutter
+	if gap < 1 {
+		return " " + left
+	}
+	return " " + left + strings.Repeat(" ", gap) + r
+}
+
 // viewLeft renders the session list panel and reports which frame row each
 // session was drawn on, for mouse hit-testing.
 func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
+	return m.viewList(outerWidth, outerHeight, false)
+}
+
+// viewList renders the session list. As focus mode's sidebar it drops the search
+// box and takes the quiet border: keystrokes land in the terminal beside it, and
+// the gradient border belongs to wherever they land.
+func (m Model) viewList(outerWidth, outerHeight int, sidebar bool) (string, map[int]int) {
 	innerWidth := outerWidth - 4
 	if innerWidth < 10 {
 		innerWidth = 10
@@ -1438,6 +1554,9 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	} else {
 		m.searchInput.Prompt = " > "
 	}
+	// Without a width the input shows only the first character of its
+	// placeholder — a lone "s" that read as a query nobody had typed.
+	m.searchInput.SetWidth(max(innerWidth-lipgloss.Width(m.searchInput.Prompt)-1, 1))
 
 	// The header is wrapped here rather than left to the panel style to wrap on
 	// its own, so its height — and therefore both the list's height and its
@@ -1447,11 +1566,15 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	// header, but the stats line wraps to two or three lines on a narrow panel,
 	// which pushed the last rows down through the bottom border.
 	wrap := lipgloss.NewStyle().Width(innerWidth)
-	header := []string{
-		wrap.Render(m.renderStats(live, waiting, running, saved)),
-		"",
-		wrap.Render(m.statusLine()),
-		"",
+	stats := m.renderStats(live, waiting, running, saved)
+	if sidebar {
+		stats = sidebarStats(live, waiting, running, innerWidth)
+	}
+	header := []string{wrap.Render(stats), ""}
+	if !sidebar {
+		header = append(header, wrap.Render(m.statusLine()), "")
+	} else if msg := m.statusMessage(); msg != "" {
+		header = append(header, wrap.Render(msg), "")
 	}
 	headerHeight := 0
 	for _, line := range header {
@@ -1482,7 +1605,11 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	// The list is where keystrokes land, so it uses the gradient-bordered
 	// primary panel. Other panels (preview, details, empty states) stay
 	// on the quieter Border color.
-	return fitBox(primaryPanelStyle(), outerWidth, outerHeight).
+	style := primaryPanelStyle()
+	if sidebar {
+		style = panelStyle()
+	}
+	return fitBox(style, outerWidth, outerHeight).
 		Render(onPlane(body, surfaceBg())), sessionAt
 }
 

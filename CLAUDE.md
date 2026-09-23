@@ -35,7 +35,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 
 - `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
-- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
+- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping), pane snapshots + window fitting + the serial key queue behind focus mode
 - `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
 - `internal/state` — state files + session registry
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
@@ -147,7 +147,8 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | Key | Action |
 |-----|--------|
 | Type | Fuzzy search sessions |
-| Enter | Jump to selected session |
+| Enter | Open the agent in nagare (focus mode); `picker.enter_action = "jump"` restores switching to tmux |
+| F5 | Open the agent in tmux itself |
 | Esc | Quit |
 | ↑/↓ | Navigate |
 | Tab | Toggle list/grid view |
@@ -169,6 +170,14 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | F4 | Jump to the next session waiting on you |
 | F1 | Help overlay |
 
+Focus mode keys: everything goes to the agent except `Ctrl+]` (back to the list;
+`picker.focus_leave_key`), `Alt+↑/↓` (switch agent), `F4` (next waiting), `Alt+s`
+(companion shell), `Shift+PgUp/PgDn` (scrollback), `Alt+z` (zoom), `F1`, `F5`
+(open in tmux; outside tmux the attach returns to nagare on detach). A single
+click on a sidebar row switches focus — the list's select-then-activate guard
+exists because activating used to leave nagare, and switching focus leaves
+nothing.
+
 F4 walks the queue: forward from the cursor and wrapping, so repeated presses reach
 every waiting session once before repeating. Most-urgent-first would ping-pong
 between the same two. Only `waiting_input` counts — offering to jump to a running
@@ -184,6 +193,78 @@ dialogs (worktree removal, inline prompt) ignore clicks and want a deliberate an
 The footer shows only the keys valid for the current mode and selection, trimmed to
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
+
+### Focus mode
+
+The picker used to end every interaction by handing the user to tmux. Focus mode
+(`focus.go`, `focusview.go`) keeps them in nagare instead: Enter draws the agent's
+live pane in place of the preview, forwards keystrokes to it, and keeps the list
+alongside as a sidebar. herdr was the reference point; the difference is that
+tmux stays the backend, so agents outlive nagare exactly as before and nagare no
+longer has to run inside tmux at all.
+
+How it works, and why each piece is the way it is:
+
+- **The pane is fitted, not cropped.** `tmux.FitWindow` resizes the agent's
+  window to exactly the panel (`focusGeometry` is the single source for both), so
+  the agent lays itself out for the space it is shown in. `ReleaseWindow` hands it
+  back — `resize-window -A` *then* unset `window-size`; the other order leaves it
+  pinned, because `-A` itself sets `manual`. A pane sharing its window is zoomed
+  first. Fitted windows carry `@nagare_focus`, and `ReleaseStaleWindows` runs at
+  startup so a crashed run cannot leave a window pinned at nagare's size.
+- **Every tmux call goes through one queue** (`tmux.Queue`). Keystrokes must
+  arrive in order; a `tea.Cmd` per key would race, and running inline would stall
+  the UI per fork. Captures go through the same worker, so a capture always sees
+  every key sent before it, and replies are numbered so a late one cannot rewind
+  the screen. Bursts of typed text coalesce into one `send-keys -l`.
+- **tmux drops a trailing `;` from any argument** — it reads it as a command
+  separator. `tmux.Arg` escapes it; every argument carrying user text or a key
+  name must go through it. This lost the `;` from `git status; pwd` typed into the
+  companion shell before it was fixed.
+- **tmux encodes keys, not nagare.** `translateKey` maps a keypress to a tmux key
+  name (`C-c`, `M-Enter`, `S-Up`) and lets send-keys produce the bytes, because
+  tmux knows what the program in the pane asked for (application cursor keys,
+  extended keys). Shift+Enter becomes `M-Enter`, the newline binding that
+  survives any terminal. Pastes go through a buffer with `paste-buffer -p`, so a
+  multi-line paste lands as one bracketed paste.
+- **Polling adapts.** ~30fps while the screen changes, backing off to 4fps when it
+  does not, and snapping to 12ms after a keystroke. Echo latency measured at
+  30–47ms through two tmux layers.
+- **Nagare keeps few keys.** Only chords an agent has no use for: the leave key
+  (`Ctrl+]`, configurable as `picker.focus_leave_key` because it is awkward on
+  many non-US layouts), `Alt+↑/↓`, `Alt+s`, `Alt+z`, `Shift+PgUp/PgDn`, F1, F4, F5.
+  **Esc goes to the agent** — it interrupts Claude — so the focus footer never
+  offers "Esc Quit"; `TestFocusFooterNeverOffersEscAsQuit` holds that.
+- **The companion shell** (`Alt+s`, `tmux.CompanionShell`) is a window in the
+  agent's session, in the agent's directory, tagged `@nagare_shell` with the
+  agent's pane id so it is reused rather than multiplied. The frame title and
+  sidebar keep describing the agent: its state is what the user is watching
+  while they work in the shell. A shell that exits hands back to its agent.
+- **New sessions and new worktrees open in focus mode.** The forms take
+  `Stay()` and return the session through `Created()` instead of switching the
+  terminal away; `FocusWhenReady` focuses it once a scan finds its agent.
+- **Scrollback is nagare's**, not copy mode: `Shift+PgUp` or the wheel re-captures
+  with `-S/-E` offsets into history. Any typed key returns to the live screen.
+
+The terminal panel is drawn by hand rather than with a lipgloss border, and the
+sidebar render is cached (`cachedSidebar`, keyed on everything `viewList` reads).
+Both for the same reason: the panel repaints at the capture rate, and `fitBox`
+measuring a whole panel was most of a frame. Focus frame: 4.3ms → 0.68ms
+(`BenchmarkViewFocus30`), panel alone 0.5ms (`BenchmarkTermPanel`).
+`TestFocusSidebarCacheIsInvisible` checks the cache is byte-identical to a fresh
+render and invalidates on every input; the layout tests cover the hand-drawn panel
+the way `fitBox` covers the rest.
+
+Tests never reach tmux: `NewForTest` injects a no-op `tmux.Runner`, and the focus
+tests record what would have been sent. A test that could resize a real window on
+the developer's machine is not acceptable.
+
+Rejected: ACP (Agent Client Protocol) as the way to talk to agents. It would give
+structured events instead of a screen, but only for agents nagare launches through
+it — not the tmux sessions already running — support varies per agent (pi has
+none), and the agent's own TUI is lost. Driving the real terminal works for every
+agent today; ACP may still suit a narrower job later, like structured permission
+prompts.
 
 ### Layout: measure, never assume
 

@@ -38,31 +38,56 @@ func main() {
 		Use:   "pick",
 		Short: "Launch session picker TUI",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// In focus mode a session created from the picker opens inside it,
+			// rather than the form switching the terminal away from nagare.
+			stay := cfg.Picker.EnterAction != config.EnterJump
+			focusNext := ""
 			for {
 				m := picker.New()
+				if focusNext != "" {
+					m = m.FocusWhenReady(focusNext)
+					focusNext = ""
+				}
 				p := tea.NewProgram(m)
 				result, err := p.Run()
+				pickerModel, ok := result.(picker.Model)
+				if ok {
+					// Hand any window focus mode resized back to tmux.
+					pickerModel.Close()
+				}
 				if err != nil {
 					return err
 				}
-
-				pickerModel, ok := result.(picker.Model)
 				if !ok {
 					return nil
 				}
 
 				switch pickerModel.Result().Action {
 				case picker.ActionNew:
-					form := tea.NewProgram(newsession.New())
-					if _, err := form.Run(); err != nil {
+					form := newsession.New()
+					if stay {
+						form = form.Stay()
+					}
+					res, err := tea.NewProgram(form).Run()
+					if err != nil {
 						return err
+					}
+					if f, ok := res.(newsession.Model); ok && stay {
+						focusNext = f.Created()
 					}
 					// Loop back to picker after form closes
 					continue
 				case picker.ActionQuickProto:
-					form := tea.NewProgram(newsession.NewQuick())
-					if _, err := form.Run(); err != nil {
+					form := newsession.NewQuick()
+					if stay {
+						form = form.Stay()
+					}
+					res, err := tea.NewProgram(form).Run()
+					if err != nil {
 						return err
+					}
+					if f, ok := res.(newsession.QuickModel); ok && stay {
+						focusNext = f.Created()
 					}
 					continue
 				default:

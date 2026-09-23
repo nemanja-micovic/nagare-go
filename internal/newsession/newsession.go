@@ -29,12 +29,14 @@ type formState struct {
 
 // Model is the full new-session form.
 type Model struct {
-	form   *huh.Form
-	state  *formState
-	width  int
-	height int
-	err    error
-	done   bool
+	form    *huh.Form
+	state   *formState
+	width   int
+	height  int
+	err     error
+	done    bool
+	stay    bool   // hand the session back instead of switching to it
+	created string // tmux session the form created, once it has
 }
 
 // New creates a new session form model.
@@ -191,7 +193,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = err
 			return m, nil
 		}
-		session.SwitchToSession(name)
+		m.created = name
+		if !m.stay {
+			session.SwitchToSession(name)
+		}
 		return m, tea.Quit
 	}
 
@@ -250,4 +255,16 @@ func (m Model) resolvedPath() string {
 		path = filepath.Join(path, m.state.name)
 	}
 	return session.ExpandPath(session.ResolvePath(path))
+}
+
+// Stay makes the form hand the new session back through Created rather than
+// switching the terminal to it — for when nagare will open it itself.
+func (m Model) Stay() Model {
+	m.stay = true
+	return m
+}
+
+// Created returns the tmux session the form created, or "" if it was cancelled.
+func (m Model) Created() string {
+	return m.created
 }

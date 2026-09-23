@@ -35,7 +35,20 @@ type PickerConfig struct {
 	ShowHelpBar         bool    `toml:"show_help_bar"`
 	Mouse               bool    `toml:"mouse"`
 	Animations          bool    `toml:"animations"`
+	// EnterAction is what Enter does on a session: "focus" opens its terminal
+	// inside nagare, "jump" switches to it in tmux as the picker always did.
+	EnterAction string `toml:"enter_action"`
+	// FocusLeaveKey returns from an agent's terminal to the session list. It is
+	// the one key focus mode keeps from the agent that has no alternative, so it
+	// is configurable for layouts where Ctrl+] is awkward to type.
+	FocusLeaveKey string `toml:"focus_leave_key"`
 }
+
+// Enter actions.
+const (
+	EnterFocus = "focus"
+	EnterJump  = "jump"
+)
 
 // AppearanceConfig controls visual settings.
 type AppearanceConfig struct {
@@ -81,6 +94,8 @@ func Default() NagareConfig {
 			ShowHelpBar:         true,
 			Mouse:               true,
 			Animations:          true,
+			EnterAction:         EnterFocus,
+			FocusLeaveKey:       "ctrl+]",
 		},
 		Appearance: AppearanceConfig{
 			Theme:     "tokyonight",
@@ -198,6 +213,18 @@ func mergePicker(defaults, parsed PickerConfig, rawVal interface{}) PickerConfig
 	}
 	if _, ok := m["show_help_bar"]; ok {
 		result.ShowHelpBar = parsed.ShowHelpBar
+	}
+	if _, ok := m["mouse"]; ok {
+		result.Mouse = parsed.Mouse
+	}
+	if _, ok := m["animations"]; ok {
+		result.Animations = parsed.Animations
+	}
+	if _, ok := m["enter_action"]; ok {
+		result.EnterAction = parsed.EnterAction
+	}
+	if v, ok := m["focus_leave_key"]; ok && v != "" {
+		result.FocusLeaveKey = parsed.FocusLeaveKey
 	}
 	return result
 }

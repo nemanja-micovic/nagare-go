@@ -20,3 +20,15 @@ func RunTmux(args ...string) string {
 func PaneTarget(sessionName string, windowIndex, paneIndex int) string {
 	return fmt.Sprintf("%s:%d.%d", sessionName, windowIndex, paneIndex)
 }
+
+// Arg protects a command argument from tmux's own parsing. tmux ends a command
+// at any argument that ends in a semicolon — and drops the semicolon — so text
+// typed as "git status; " or a key named "M-;" would lose it. A backslash before
+// the final semicolon makes tmux keep it literally, and composes correctly with
+// text that already ends in "\;".
+func Arg(s string) string {
+	if strings.HasSuffix(s, ";") {
+		return s[:len(s)-1] + `\;`
+	}
+	return s
+}
