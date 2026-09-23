@@ -13,6 +13,7 @@ import (
 	"github.com/nemke/nagare-go/internal/mcp"
 	"github.com/nemke/nagare-go/internal/newsession"
 	"github.com/nemke/nagare-go/internal/notifs"
+	"github.com/nemke/nagare-go/internal/nvim"
 	"github.com/nemke/nagare-go/internal/picker"
 	"github.com/nemke/nagare-go/internal/popup"
 	"github.com/nemke/nagare-go/internal/session"
@@ -194,7 +195,34 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
+	lsCmd := &cobra.Command{
+		Use:   "ls",
+		Short: "List tmux agents as JSON (read by the Neovim plugin)",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return nvim.WriteList(os.Stdout)
+		},
+	}
+
+	nvimCmd := &cobra.Command{
+		Use:   "nvim [name]",
+		Short: "Attach to a persistent Neovim that owns your agents, starting it if needed",
+		Long: `Attach to a headless Neovim that keeps running after this terminal closes.
+
+Agents started by the nagare plugin live as terminal buffers inside it, so
+they survive detaching (:Nagare detach) exactly as they would in tmux.
+An optional name selects a separate runtime.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			return nvim.Attach(name)
+		},
+	}
+
+	rootCmd.AddCommand(lsCmd, nvimCmd, pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

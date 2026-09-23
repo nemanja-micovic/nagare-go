@@ -99,3 +99,17 @@ func TestShouldNotify_NeedsInputNotRepeated(t *testing.T) {
 		t.Errorf("expected empty on repeated waiting_input, got %q", eventType)
 	}
 }
+
+func TestPaneIDPrefersNvimAgent(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%7")
+	t.Setenv(NvimPaneEnv, "")
+	if got := PaneID(); got != "%7" {
+		t.Errorf("outside nvim: PaneID() = %q, want %%7", got)
+	}
+	// Neovim inside tmux: TMUX_PANE is the editor's pane, shared by every
+	// agent in it, so the plugin's id must win.
+	t.Setenv(NvimPaneEnv, "nvim:123:4")
+	if got := PaneID(); got != "nvim:123:4" {
+		t.Errorf("inside nvim: PaneID() = %q, want nvim:123:4", got)
+	}
+}

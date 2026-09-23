@@ -1,0 +1,67 @@
+*nagare.txt*  Agents across projects, with Neovim as the multiplexer
+
+==============================================================================
+CONTENTS                                                     *nagare*
+
+A project is a tab (tab-local cwd). An agent is a terminal buffer running an
+agent CLI (claude, codex, opencode, gemini, crush, pi). The board shows every
+agent in every project, most urgent first; one key takes you to whichever
+needs you. Design notes: docs/nvim.md in the repository.
+
+==============================================================================
+SETUP                                                        *nagare-setup*
+
+>lua
+    require("nagare").setup({ projects = { "~/code/*" } })
+<
+Run `nagare-go setup` once so agents report status through hooks (instant);
+without it status comes from reading the agent's screen. `nagare-go nvim`
+starts a persistent editor that keeps agents alive after the terminal closes.
+Check everything with |:checkhealth| nagare.
+
+==============================================================================
+COMMANDS                                                     *:Nagare*
+
+:Nagare [board]              Open the board.
+:Nagare new [agent] [dir]    Start an agent in the current project (or dir).
+:Nagare worktree {name} [agent]
+                             New git worktree + branch {name} under
+                             .worktrees/, with an agent in it.
+:Nagare next                 Jump to the next waiting agent, wrapping.
+:Nagare peek                 Most urgent agent in a float.
+:Nagare toggle               Show/hide this project's agent split.
+:Nagare project [dir]        Open a project in its tab.
+:[range]Nagare send [text]   Send "@file#Lx-y text" to the project's agent.
+:Nagare rename {name}        Rename the agent whose terminal you are in.
+:Nagare detach               Detach from a `nagare-go nvim` runtime.
+
+==============================================================================
+MAPPINGS                                                     *nagare-mappings*
+
+<leader>jj board       <leader>jw next waiting    <leader>jp peek
+<leader>ja toggle      <leader>jn new agent       <leader>jt worktree
+<leader>jo project     <leader>js send reference
+<C-q>      in an agent terminal: back to code, or close the peek
+
+Board: <CR> jump  p peek  a new  A pick agent  w worktree  y approve
+       Y approve always  x kill/remove  r rename  n next  o project
+       R refresh  q close
+
+Change them under `keys` in setup(); `keys = false` disables all.
+
+==============================================================================
+API                                                          *nagare-api*
+
+require("nagare").statusline()   statusline string, e.g. "● 2 ◐ 1"
+require("nagare").lualine()      lualine component
+require("nagare").tabline()      tabline with status dots (or `tabline = true`)
+require("nagare").summary()      { waiting_input =, running =, idle =, dead = }
+require("nagare").entries()      every agent, editor and tmux
+
+User autocmd `NagareStatus` fires on every status change, with data
+{ id, key, status, prev }.
+
+Highlights: NagareWaiting NagareRunning NagareIdle NagareDead NagareProject
+NagareDim NagareBorder NagareTitle NagareTmux NagareAgent_{agent}
+
+ vim:tw=78:ts=8:ft=help:norl:

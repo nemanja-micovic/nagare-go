@@ -105,6 +105,20 @@ func ShouldNotify(newState, prevState string, workingSeconds, minWorkingSeconds 
 	return "", 0
 }
 
+// NvimPaneEnv names the variable the Neovim plugin sets on every agent it
+// starts. Its value ("nvim:<pid>:<n>") stands in for TMUX_PANE, which inside
+// Neovim would be the editor's own pane and shared by every agent in it.
+const NvimPaneEnv = "NAGARE_PANE"
+
+// PaneID returns the identifier state files are keyed by: the Neovim agent id
+// when the agent runs inside the plugin, else the tmux pane.
+func PaneID() string {
+	if id := os.Getenv(NvimPaneEnv); id != "" {
+		return id
+	}
+	return os.Getenv("TMUX_PANE")
+}
+
 // Handle reads a hook event from stdin and processes it.
 // Exits with code 1 on fatal errors so hook failures are visible.
 func Handle() {
@@ -132,7 +146,7 @@ func Handle() {
 		State:            newState,
 		SessionID:        event.SessionID,
 		Cwd:              event.Cwd,
-		PaneID:           os.Getenv("TMUX_PANE"),
+		PaneID:           PaneID(),
 		Event:            event.HookEventName,
 		NotificationType: event.NotificationType,
 		LastMessage:      event.LastAssistantMessage,
@@ -179,10 +193,15 @@ func Handle() {
 	sessionName := resolveSessionName(event.Cwd)
 	message := notifications.BuildToastMessage(sessionName, eventType, event.NotificationType)
 
-	notifications.Deliver(message, eventCfg.Toast, eventCfg.Bell, eventCfg.OsNotify, cfg.NotificationDuration)
+	// An agent inside Neovim is announced by the plugin in the editor it runs
+	// in; a tmux toast or popup would land in whatever tmux pane has focus.
+	inNvim := os.Getenv(NvimPaneEnv) != ""
+	toast, popup := eventCfg.Toast && !inNvim, eventCfg.Popup && !inNvim
+
+	notifications.Deliver(message, toast, eventCfg.Bell && !inNvim, eventCfg.OsNotify, cfg.NotificationDuration)
 
 	// Send popup if enabled
-	if eventCfg.Popup {
+	if popup {
 		notifications.SendPopup(sessionName, eventType, message, workingSeconds, eventCfg.PopupTimeout)
 	}
 

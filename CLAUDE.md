@@ -12,6 +12,7 @@ Go rewrite of [nagare](../nagare) — tmux session manager for AI coding agents.
 go build -o nagare-go .    # build (debug)
 go test ./... -v           # run all tests
 go vet ./...               # lint
+nvim --headless --clean -l tests/nvim/run.lua   # Neovim plugin specs (NAGARE_BIN=./nagare-go adds the hook e2e test)
 ```
 
 ## Commands
@@ -27,7 +28,32 @@ nagare-go new [path]       # create new agent session
 nagare-go new <repo> -w <name>  # create a named git worktree and start an agent in it
 nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
+nagare-go ls               # tmux agents as JSON (read by the Neovim plugin)
+nagare-go nvim [name]      # attach to a persistent headless Neovim that owns agents
 ```
+
+## Neovim plugin (experiment)
+
+`lua/nagare`, `plugin/`, `doc/` at the repo root make the repo installable with
+lazy.nvim. Neovim is the multiplexer: a project is a tab (`:tcd`), an agent is a
+`:terminal` buffer, the board is the picker's list view. Full design, trade-offs and
+install spec in `docs/nvim.md`.
+
+- Agents get `NAGARE_PANE=nvim:<pid>:<n>`; `hooks.PaneID()` prefers it over `TMUX_PANE`
+  (which inside Neovim is the editor's pane, shared by every agent), and the Go side skips
+  tmux toast/popup for them — the plugin notifies instead.
+- The plugin watches the states dir with libuv `fs_event`; scraping the terminal buffer
+  is the fallback for unhooked agents. A permission prompt counts as waiting only if no
+  bare input prompt is drawn below it.
+- `internal/nvim.Entry` is the JSON contract with `lua/nagare/tmux.lua`; renaming a field
+  breaks the plugin silently, which is why a test pins the keys.
+- Unix socket paths cap at ~104–108 bytes and Neovim does not fail on a longer one, it just
+  never listens. `SocketPath` prefers `$XDG_RUNTIME_DIR` and `Attach` refuses long paths.
+- LazyVim: keys under `<leader>j` (LazyVim owns `<leader>n` and `<leader>a`), which-key group
+  label, a lualine component, dashboards count as an untouched tab, and `on_project_open =
+  "auto"` opens snacks/fzf-lua/telescope files only for explicit project opens.
+- Board layout follows the same rule as the TUIs — measured widths, hint bar trimmed in drop
+  order with `q close` reserved; `board_spec` checks every line fits.
 
 ## Architecture
 

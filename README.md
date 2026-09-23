@@ -100,6 +100,26 @@ nagare-go mcp          # run MCP server (stdio, used by agent CLIs)
 | Ctrl+t | Theme picker |
 | F1 | Help |
 
+## Neovim plugin (experimental)
+
+The same idea with Neovim as the multiplexer: each project is a tab and each agent is a
+terminal buffer. A live board shows every agent across projects (tmux ones included), and
+one key jumps to whichever is waiting. Works with LazyVim out of the box:
+
+```lua
+-- ~/.config/nvim/lua/plugins/nagare.lua
+return {
+  "nemanja-micovic/nagare-go",
+  branch = "claude/nagare-herdr-nvim-plugin-8n9sdp",
+  event = "VeryLazy",
+  opts = { projects = { "~/code/*" } },
+}
+```
+
+`<leader>jj` opens the board, `<leader>jw` jumps to the next waiting agent, and
+`nagare-go nvim` keeps agents alive after the terminal closes. See
+[docs/nvim.md](docs/nvim.md).
+
 ## Configuration
 
 `~/.config/nagare/config.toml`
