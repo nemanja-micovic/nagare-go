@@ -75,14 +75,13 @@ func focusedModel(t *testing.T, m Model) (Model, *sentKeys) {
 	m.focus.q = tmux.NewQueueWith(rec.run)
 	m.focus.captures = new(uint64)
 	m.focus.on = true
-	m.focus.pane = "%1"
-	m.focus.key = sessionKey(s)
-	m.focus.name = s.Name
-	m.focus.agent = s.AgentType
+	m.focus.n, m.focus.active = 1, 0
+	m.focus.tiles[0] = paneView{pane: "%1", key: sessionKey(s), name: s.Name, agent: s.AgentType}
 	g := m.focusGeometry()
-	m.focus.fitW, m.focus.fitH = g.termW, g.termH
-	m.focus.screen = agentScreen(g.termW, g.termH)
-	m.focus.have = true
+	t0 := m.focus.cur()
+	t0.fitW, t0.fitH = g.termW, g.termH
+	t0.screen = agentScreen(g.termW, g.termH)
+	t0.have = true
 	return m, rec
 }
 
@@ -164,12 +163,12 @@ func TestFocusCursorTracksAgent(t *testing.T) {
 	}
 
 	scrolled := m
-	scrolled.focus.scroll = 3
+	scrolled.focus.cur().scroll = 3
 	if scrolled.focusCursor() != nil {
 		t.Error("cursor shown while scrolled back into history")
 	}
 	hidden := m
-	hidden.focus.screen.CursorVisible = false
+	hidden.focus.cur().screen.CursorVisible = false
 	if hidden.focusCursor() != nil {
 		t.Error("cursor shown although the agent hides it")
 	}
@@ -222,7 +221,7 @@ func TestFocusReservedKeys(t *testing.T) {
 	}
 
 	next := driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModAlt})
-	if next.focus.key == m.focus.key || next.cursor != 1 {
+	if next.focus.cur().key == m.focus.cur().key || next.cursor != 1 {
 		t.Errorf("Alt+Down did not move focus to the next agent (cursor %d)", next.cursor)
 	}
 
@@ -246,9 +245,9 @@ func TestFocusNextWaiting(t *testing.T) {
 		t.Fatal("fixture changed: expected one waiting session and one not")
 	}
 	m.cursor = idle
-	m.focus.key = sessionKey(m.filtered[idle])
+	m.focus.cur().key = sessionKey(m.filtered[idle])
 	m = driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyF4})
-	if s, _ := m.selectedSession(); s.Status != models.StatusWaitingInput || m.focus.key != sessionKey(s) {
+	if s, _ := m.selectedSession(); s.Status != models.StatusWaitingInput || m.focus.cur().key != sessionKey(s) {
 		t.Errorf("F4 focused %q (%s), want the waiting session", s.Name, s.Status)
 	}
 }
@@ -270,15 +269,15 @@ func TestFocusPasteIsOnePaste(t *testing.T) {
 // and typing returns to the live screen.
 func TestFocusScrollClampsToHistory(t *testing.T) {
 	m, _ := focusedModel(t, newVisualModel(t, 140, 36))
-	m.focus.screen.History = 10
+	m.focus.cur().screen.History = 10
 	m = driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
 	m = driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp, Mod: tea.ModShift})
-	if m.focus.scroll != 10 {
-		t.Errorf("scroll = %d, want clamped to history (10)", m.focus.scroll)
+	if m.focus.cur().scroll != 10 {
+		t.Errorf("scroll = %d, want clamped to history (10)", m.focus.cur().scroll)
 	}
 	m = typeString(t, m, "x")
-	if m.focus.scroll != 0 {
-		t.Errorf("typing left the view scrolled back by %d", m.focus.scroll)
+	if m.focus.cur().scroll != 0 {
+		t.Errorf("typing left the view scrolled back by %d", m.focus.cur().scroll)
 	}
 }
 
@@ -291,11 +290,11 @@ func TestFocusStaleCaptureIgnored(t *testing.T) {
 	older := agentScreen(10, 3)
 	older.Lines[0] = "older"
 	m = driveModel(t, m,
-		focusSnapMsg{seq: -1, n: 2, pane: "%1", screen: newer},
-		focusSnapMsg{seq: -1, n: 1, pane: "%1", screen: older},
+		focusSnapMsg{seq: -1, n: 2, snaps: []tileSnap{{pane: "%1", screen: newer}}},
+		focusSnapMsg{seq: -1, n: 1, snaps: []tileSnap{{pane: "%1", screen: older}}},
 	)
-	if m.focus.screen.Lines[0] != "newer" {
-		t.Errorf("screen shows %q after a stale capture, want %q", m.focus.screen.Lines[0], "newer")
+	if m.focus.cur().screen.Lines[0] != "newer" {
+		t.Errorf("screen shows %q after a stale capture, want %q", m.focus.cur().screen.Lines[0], "newer")
 	}
 }
 
@@ -303,8 +302,8 @@ func TestFocusStaleCaptureIgnored(t *testing.T) {
 // mode returns to the list and says why rather than showing a dead frame.
 func TestFocusExitWhenPaneGone(t *testing.T) {
 	m, _ := focusedModel(t, newVisualModel(t, 140, 36))
-	name := m.focus.name
-	m = driveModel(t, m, focusSnapMsg{seq: m.focus.seq, n: 1, pane: "%1", err: tmux.ErrPaneGone})
+	name := m.focus.cur().name
+	m = driveModel(t, m, focusSnapMsg{seq: m.focus.seq, n: 1, snaps: []tileSnap{{pane: "%1", err: tmux.ErrPaneGone}}})
 	if m.focus.on {
 		t.Fatal("still focused on a pane that is gone")
 	}
@@ -342,11 +341,12 @@ func BenchmarkViewFocus30(b *testing.B) {
 	rec := &sentKeys{}
 	m.focus.q = tmux.NewQueueWith(rec.run)
 	m.focus.on = true
-	m.focus.key = sessionKey(m.filtered[0])
-	m.focus.name = m.filtered[0].Name
+	m.focus.n = 1
+	m.focus.cur().key = sessionKey(m.filtered[0])
+	m.focus.cur().name = m.filtered[0].Name
 	g := m.focusGeometry()
-	m.focus.screen = agentScreen(g.termW, g.termH)
-	m.focus.have = true
+	m.focus.cur().screen = agentScreen(g.termW, g.termH)
+	m.focus.cur().have = true
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.View()
@@ -357,10 +357,11 @@ func BenchmarkViewFocus30(b *testing.B) {
 func BenchmarkTermPanel(b *testing.B) {
 	m := benchModel(30, 200, 50)
 	m.focus.on = true
-	m.focus.name = "bench"
+	m.focus.n = 1
+	m.focus.cur().name = "bench"
 	g := m.focusGeometry()
-	m.focus.screen = agentScreen(g.termW, g.termH)
-	m.focus.have = true
+	m.focus.cur().screen = agentScreen(g.termW, g.termH)
+	m.focus.cur().have = true
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.renderTermPanel(g)
@@ -441,7 +442,7 @@ func TestEnterOpensFocus(t *testing.T) {
 		t.Fatal("Enter did not open focus mode")
 	}
 	g := m.focusGeometry()
-	want := []string{"resize-window", "-t", m.focus.pane, "-x", fmt.Sprint(g.termW), "-y", fmt.Sprint(g.termH)}
+	want := []string{"resize-window", "-t", m.focus.cur().pane, "-x", fmt.Sprint(g.termW), "-y", fmt.Sprint(g.termH)}
 	found := false
 	for _, c := range rec.all(m.focus.q) {
 		if len(c) >= len(want) && reflect.DeepEqual(c[:len(want)], want) {
@@ -471,8 +472,8 @@ func TestFocusRefitsOnResize(t *testing.T) {
 	m = driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = driveModel(t, m, tea.WindowSizeMsg{Width: 180, Height: 44})
 	g := m.focusGeometry()
-	if m.focus.fitW != g.termW || m.focus.fitH != g.termH {
-		t.Errorf("fitted to %dx%d after resize, want %dx%d", m.focus.fitW, m.focus.fitH, g.termW, g.termH)
+	if m.focus.cur().fitW != g.termW || m.focus.cur().fitH != g.termH {
+		t.Errorf("fitted to %dx%d after resize, want %dx%d", m.focus.cur().fitW, m.focus.cur().fitH, g.termW, g.termH)
 	}
 }
 
@@ -491,8 +492,8 @@ func TestFocusWhenReady(t *testing.T) {
 		Status: models.StatusIdle, AgentType: models.AgentCodex,
 	})
 	m = driveModel(t, m, SessionsUpdatedMsg(sessions))
-	if !m.focus.on || m.focus.pane != "%9" {
-		t.Fatalf("did not focus the new session (on=%v pane=%q)", m.focus.on, m.focus.pane)
+	if !m.focus.on || m.focus.cur().pane != "%9" {
+		t.Fatalf("did not focus the new session (on=%v pane=%q)", m.focus.on, m.focus.cur().pane)
 	}
 	if s, _ := m.selectedSession(); s.Name != "fresh" {
 		t.Errorf("sidebar selection is %q, want the focused session", s.Name)
@@ -504,7 +505,7 @@ func TestFocusWhenReady(t *testing.T) {
 func TestFocusSelectionFollowsResort(t *testing.T) {
 	m, _ := recordingModel(t, 140, 36)
 	m = driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
-	focused := m.focus.key
+	focused := m.focus.cur().key
 	sessions := append([]models.Session(nil), m.sessions...)
 	for i := range sessions {
 		if sessionKey(sessions[i]) == focused {

@@ -372,7 +372,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.focus.on {
 			return m, nil
 		}
-		return m.scrollFocus(msg.delta)
+		return m.scrollFocus(msg.tile, msg.delta)
+
+	case mouseTileMsg:
+		if !m.focus.on {
+			return m, nil
+		}
+		return m.activateTile(msg.tile)
 
 	case mouseSelectMsg:
 		if msg.index < 0 || msg.index >= len(m.filtered) {
@@ -485,7 +491,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 		// The sidebar's selection is the focused agent, wherever the re-sort put it.
 		if m.focus.on {
-			m.selectKey(m.focus.key)
+			m.selectKey(m.focus.cur().key)
 		}
 		var focusCmd tea.Cmd
 		m, focusCmd = m.resolvePendingFocus()
@@ -1761,7 +1767,13 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		// Every segment already carries rowBg, so the row is assembled by plain
 		// concatenation and padded once. onPlane re-establishes the tint after the
 		// resets the segments leave behind.
-		line := " " + dot + " " + prefixStyled + agentStyled + nameStyled +
+		// With several tiles open, the agents on screen carry a thin accent bar
+		// in the gutter, so the sidebar also says which ones are tiled.
+		gutter := " "
+		if m.focus.on && m.focus.n > 1 && m.focus.onScreen(sessionKey(s)) {
+			gutter = bg.Foreground(c.Accent).Render("▎")
+		}
+		line := gutter + dot + " " + prefixStyled + agentStyled + nameStyled +
 			strings.Repeat(" ", gap) + starStyled + branchStyled +
 			strings.Repeat(" ", rowGutter)
 		lines = append(lines, bg.Width(width).Render(onPlane(line, rowBg)))

@@ -111,13 +111,19 @@ func focusHints(m Model) []hint {
 			hints = append(hints, hint{"F4", fmt.Sprintf("%d waiting", n)})
 		}
 	}
+	if m.focus.n > 1 {
+		hints = append(hints, hint{"Alt ←/→", "Tile"}, hint{"Alt+x", "Close tile"})
+	}
+	if m.focus.n < maxTiles {
+		hints = append(hints, hint{"Alt+v", "Split"})
+	}
 	hints = append(hints, hint{"Alt ↑/↓", "Switch"})
-	if m.focus.shell {
+	if m.focus.cur().shell {
 		hints = append(hints, hint{"Alt+s", "Agent"})
 	} else {
 		hints = append(hints, hint{"Alt+s", "Shell"})
 	}
-	if m.focus.scroll > 0 {
+	if m.focus.cur().scroll > 0 {
 		hints = append(hints, hint{"⇧PgDn", "Live"})
 	} else {
 		hints = append(hints, hint{"⇧PgUp", "Scroll"})
@@ -224,6 +230,9 @@ func helpColumns(leave string) ([]helpSection, []helpSection) {
 			{"Keys", "Go straight to the agent"},
 			{leave, "Back to the session list"},
 			{"Alt+↑/↓", "Previous / next agent"},
+			{"Alt+v", "Split: add the next agent"},
+			{"Alt+←/→", "Move between tiles"},
+			{"Alt+x", "Close the active tile"},
 			{"Alt+s", "Shell in the agent's directory"},
 			{"F4", "Next agent waiting on you"},
 			{"Shift+PgUp", "Scroll back (PgDn: forward)"},

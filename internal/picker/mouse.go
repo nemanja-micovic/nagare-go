@@ -20,9 +20,11 @@ type (
 	mouseScrollMsg struct{ delta int }
 	// mouseFocusMsg focuses a session, from a click in focus mode's sidebar.
 	mouseFocusMsg struct{ index int }
-	// mouseTermScrollMsg scrolls the focused terminal by delta rows (positive
-	// is back into history).
-	mouseTermScrollMsg struct{ delta int }
+	// mouseTermScrollMsg scrolls a focus-mode tile by delta rows (positive is
+	// back into history).
+	mouseTermScrollMsg struct{ tile, delta int }
+	// mouseTileMsg gives the keyboard to a focus-mode tile.
+	mouseTileMsg struct{ tile int }
 )
 
 // termScrollStep is how many rows a wheel notch scrolls a focused terminal —
@@ -54,8 +56,9 @@ type hitTargets struct {
 	dismissable bool
 	// focus is set in focus mode, where the sidebar and terminal take over.
 	focus bool
-	// term bounds the focused terminal panel.
-	term image.Rectangle
+	// term bounds the focus-mode tile area; tiles bound each tile in it.
+	term  image.Rectangle
+	tiles []image.Rectangle
 }
 
 type cardHit struct {
@@ -77,13 +80,18 @@ func (h hitTargets) resolve(msg tea.MouseMsg, cursor int) tea.Msg {
 			// The wheel scrolls what it is over. Over the terminal that is the
 			// agent's history; the sidebar is short enough not to need it, and
 			// switching agents on a wheel notch would be far too easy to do.
-			if h.dialog.Empty() && image.Pt(mouse.X, mouse.Y).In(h.term) {
-				switch mouse.Button {
-				case tea.MouseWheelUp:
-					return mouseTermScrollMsg{delta: termScrollStep}
-				case tea.MouseWheelDown:
-					return mouseTermScrollMsg{delta: -termScrollStep}
-				}
+			if !h.dialog.Empty() {
+				return nil
+			}
+			tile := h.tileAt(mouse.X, mouse.Y)
+			if tile < 0 {
+				return nil
+			}
+			switch mouse.Button {
+			case tea.MouseWheelUp:
+				return mouseTermScrollMsg{tile: tile, delta: termScrollStep}
+			case tea.MouseWheelDown:
+				return mouseTermScrollMsg{tile: tile, delta: -termScrollStep}
 			}
 			return nil
 		}
@@ -124,6 +132,10 @@ func (h hitTargets) resolveClick(x, y, cursor int) tea.Msg {
 				return mouseFocusMsg{index: idx}
 			}
 		}
+		// Clicking a tile gives it the keyboard, as clicking a window would.
+		if tile := h.tileAt(x, y); tile >= 0 {
+			return mouseTileMsg{tile: tile}
+		}
 		return nil
 	}
 
@@ -147,4 +159,14 @@ func activateOrSelect(index, cursor int) tea.Msg {
 		return mouseActivateMsg{index: index}
 	}
 	return mouseSelectMsg{index: index}
+}
+
+// tileAt returns the focus-mode tile under a point, or -1.
+func (h hitTargets) tileAt(x, y int) int {
+	for i, r := range h.tiles {
+		if image.Pt(x, y).In(r) {
+			return i
+		}
+	}
+	return -1
 }

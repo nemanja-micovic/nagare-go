@@ -257,6 +257,9 @@ func (a *agent) apply(e edit) {
 	fmt.Printf("%s \x1b[1mUpdate\x1b[0m(%s)\n", a.look.bullet, e.path)
 	fmt.Printf("  \x1b[38;5;244m⎿  Updated %s with %d additions\x1b[0m\n", e.path, len(e.lines))
 	for i, l := range e.lines {
+		// Tabs expanded, as real agents show diffs: a tab inside a highlighted
+		// run renders at whatever width the terminal likes.
+		l = strings.ReplaceAll(l, "\t", "    ")
 		fmt.Printf("     \x1b[48;2;34;60;38m %3d + %-60s\x1b[0m\n", start+i, l)
 	}
 	fmt.Println()
