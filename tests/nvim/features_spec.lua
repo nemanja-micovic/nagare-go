@@ -199,6 +199,34 @@ return {
     eq(agents.restore(), 0)
   end },
 
+  -- Tasks ---------------------------------------------------------------------
+  { "tasks: an agent starts on its task through the CLI's prompt argument", function()
+    config.agents.fake = { cmd = { "bash", "-c", 'echo "TASK:$1"; sleep 30', "fake" }, sigil = "F", prompt = { "{prompt}" } }
+    local a = assert(agents.spawn({ kind = "fake", cwd = git_repo("task"), prompt = "fix the flaky test" }))
+    wait_for(3000, function()
+      return screen(a):find("TASK:fix the flaky test", 1, true) ~= nil
+    end, "task passed as argument")
+    eq(a.task, "fix the flaky test")
+    eq(agents.prompt_args("claude", "x"), { "x" })
+    eq(agents.prompt_args("opencode", "x"), { "--prompt", "x" })
+    eq(agents.prompt_args("crush", "x"), {}, "no template: typed in instead")
+  end },
+
+  { "tasks: a sentence names its worktree", function()
+    eq(nagare.slug("Fix the login redirect on Safari"), "fix-login-redirect-safari")
+    eq(nagare.slug("  "):match("^task%-%d+$") ~= nil, true)
+    config.agents.fake = { cmd = { "bash", "-c", 'echo "TASK:$1"; sleep 30', "fake" }, sigil = "F", prompt = { "{prompt}" } }
+    local repo = git_repo("task-wt")
+    require("nagare.projects").open(repo)
+    local a = assert(nagare.worktree(nil, "fake", "Add dark mode toggle"))
+    eq(a.name, "add-dark-mode-toggle")
+    eq(a.worktree, "add-dark-mode-toggle")
+    wait_for(3000, function()
+      return screen(a):find("TASK:Add dark mode toggle", 1, true) ~= nil
+    end, "task reached the worktree agent")
+    vim.cmd("stopinsert")
+  end },
+
   -- Terminal ------------------------------------------------------------------
   { "terminal: agents get a clean environment and their own filetype", function()
     use_fake('echo "RT=[${VIMRUNTIME}] NV=[${NVIM}] PANE=[${NAGARE_PANE}]"; sleep 30')
@@ -242,7 +270,7 @@ return {
     local seen = capture(function()
       vim.cmd("Nagare frobnicate")
     end)
-    truthy(seen[1] and seen[1].msg:find("board, detach", 1, true), vim.inspect(seen))
+    truthy(seen[1] and seen[1].msg:find("one of: board, ", 1, true), vim.inspect(seen))
   end },
 
   -- Board ---------------------------------------------------------------------

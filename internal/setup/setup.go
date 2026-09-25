@@ -36,6 +36,10 @@ var codexHookEvents = []string{
 	"SessionEnd",
 }
 
+// stopHookTimeout (seconds) bounds Claude's Stop hook, which runs the
+// project's verify command; it must exceed verify.Timeout.
+const stopHookTimeout = 600
+
 // notificationEvent has a matcher, handled separately.
 const notificationMatcher = "idle_prompt|permission_prompt|elicitation_dialog"
 
@@ -179,7 +183,9 @@ func registerMCPCodex(configPath, nagareBin string) error {
 // active. Codex asks the user to review new command hooks in /hooks.
 func installCodexHooks(home, nagareBin string) error {
 	hooksPath := filepath.Join(home, ".codex", "hooks.json")
-	hookCmd := nagareBin + " hook-state"
+	// --agent tells hook-state which envelope it is answering, so it knows
+	// SessionStart output reaches the agent's context (the memory digest).
+	hookCmd := nagareBin + " hook-state --agent codex"
 
 	settings, err := loadJSON(hooksPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -292,7 +298,7 @@ func registerMCPLocal(configPath, nagareBin string) error {
 
 func installClaudeHooks(home, nagareBin string) error {
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	hookCmd := nagareBin + " hook-state"
+	hookCmd := nagareBin + " hook-state --agent claude"
 
 	// Load existing settings
 	settings, err := loadJSON(settingsPath)
@@ -325,9 +331,16 @@ func installClaudeHooks(home, nagareBin string) error {
 
 	// Standard events: matcher="" matches all
 	for _, event := range hookEvents {
+		entry := hookEntry
+		if event == "Stop" {
+			// Stop may run the project's .nagare/verify checks; give them
+			// longer than verify.Timeout so a slow suite reports a failure
+			// instead of the hook being killed.
+			entry = map[string]interface{}{"type": "command", "command": hookCmd, "timeout": stopHookTimeout}
+		}
 		hooksMap[event] = appendHookEntry(hooksMap[event], map[string]interface{}{
 			"matcher": "",
-			"hooks":   []interface{}{hookEntry},
+			"hooks":   []interface{}{entry},
 		})
 	}
 

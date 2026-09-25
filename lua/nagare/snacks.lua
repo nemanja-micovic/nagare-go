@@ -137,6 +137,7 @@ function M.register()
     return false
   end
   snacks.picker.sources.nagare = M.source
+  snacks.picker.sources.nagare_memory = require("nagare.memory").source
   return true
 end
 

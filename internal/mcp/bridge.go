@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/nemke/nagare-go/internal/memory"
 )
 
 // ToolNames returns the bridgeable tool names, sorted.
@@ -48,6 +50,34 @@ var bridgeTools = map[string]func(ctx context.Context, mySession string, args []
 			return "", err
 		}
 		return ReplyHandler(mySession, input), nil
+	},
+	"remember": func(_ context.Context, mySession string, args []byte) (string, error) {
+		var input memory.RememberInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return RememberHandler(mySession, memoryCwd(), input), nil
+	},
+	"recall": func(_ context.Context, _ string, args []byte) (string, error) {
+		var input memory.RecallInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return RecallHandler(memoryCwd(), input), nil
+	},
+	"get_memory": func(_ context.Context, _ string, args []byte) (string, error) {
+		var input memory.GetInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return GetMemoryHandler(memoryCwd(), input), nil
+	},
+	"update_memory": func(_ context.Context, _ string, args []byte) (string, error) {
+		var input memory.UpdateInput
+		if err := decodeArgs(args, &input); err != nil {
+			return "", err
+		}
+		return UpdateMemoryHandler(memoryCwd(), input), nil
 	},
 }
 

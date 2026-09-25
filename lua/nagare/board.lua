@@ -41,14 +41,23 @@ function M.groups(entries)
       group(root).tab = api.nvim_tabpage_get_number(tab)
     end
   end
+  local review = require("nagare.review")
+  -- Unreviewed changes rank just below waiting: after "answer me" comes
+  -- "look at what I did".
+  local function rank(e)
+    if review.needs_review(e) then
+      return 1.5
+    end
+    return agents.rank[e.status] or 8
+  end
   for _, e in ipairs(entries) do
     local g = group(e.root)
     table.insert(g.entries, e)
-    g.rank = math.min(g.rank, agents.rank[e.status] or 8)
+    g.rank = math.min(g.rank, rank(e))
   end
   for _, g in ipairs(groups) do
     table.sort(g.entries, function(a, b)
-      local ra, rb = agents.rank[a.status] or 8, agents.rank[b.status] or 8
+      local ra, rb = rank(a), rank(b)
       if ra ~= rb then
         return ra < rb
       end
@@ -150,6 +159,11 @@ M.keys = {
   { "y", "approve", "Approve a waiting agent", function()
     approve(false)
   end },
+  { "d", "review", "Review what the agent changed", after_close(function(it)
+    if it.kind == "agent" and it.entry.source == "nvim" then
+      require("nagare.review").open(it.entry)
+    end
+  end) },
   { "n", "next", "Jump to the next waiting agent", function()
     M.close()
     require("nagare").next_waiting()
@@ -260,9 +274,11 @@ function M.build(width)
 
   local counts = nagare.summary()
   local head = line():add(" nagare ", "NagareTitle")
-  for _, s in ipairs({ "waiting_input", "running", "idle", "saved" }) do
+  for _, s in ipairs({ "waiting_input", "review", "running", "idle", "saved" }) do
     if counts[s] > 0 then
-      head:add("  "):add(("%s %d %s"):format(nagare.status_icon[s], counts[s], status_word[s]), nagare.status_hl[s])
+      local icon = s == "review" and nagare.review_icon or nagare.status_icon[s]
+      local word = s == "review" and "to review" or status_word[s]
+      head:add("  "):add(("%s %d %s"):format(icon, counts[s], word), s == "review" and "NagareReview" or nagare.status_hl[s])
     end
   end
   if #groups == 0 then
@@ -273,13 +289,15 @@ function M.build(width)
 
   -- Columns: slot, icon, sigil, name, status, age, message, branch.
   local name_w = math.max(math.min(24, math.floor(width * 0.26)), 10)
-  local branch_w = math.max(math.min(22, math.floor(width * 0.2)), 8)
+  local branch_w = math.max(math.min(28, math.floor(width * 0.24)), 8)
   local msg_w = width - (6 + 2 + 2 + name_w + 1 + 8 + 5 + branch_w + 1)
 
   for gi, g in ipairs(groups) do
     local st = g.entries[1] and g.entries[1].status or nil
     local l = line():add("  ")
-    if st then
+    if g.entries[1] and require("nagare.review").needs_review(g.entries[1]) then
+      l:add(nagare.review_icon, "NagareReview")
+    elseif st then
       l:add(nagare.status_icon[st], nagare.status_hl[st])
     else
       l:add(" ")
@@ -306,17 +324,34 @@ function M.build(width)
     for _, e in ipairs(g.entries) do
       local a = line():add("  ")
       a:add(slots[e] and tostring(slots[e]) or " ", "NagareSlot"):add(" ")
-      a:add(nagare.status_icon[e.status] or "?", nagare.status_hl[e.status])
+      local pending = require("nagare.review").needs_review(e)
+      local icon = pending and nagare.review_icon or (nagare.status_icon[e.status] or "?")
+      local hl = pending and "NagareReview" or nagare.status_hl[e.status]
+      a:add(icon, hl)
       a:add(" "):add(nagare.sigil(e.kind), "NagareAgent_" .. (e.kind or ""))
       a:add(" "):add(util.fit(e.name, name_w), e.source == "tmux" and "NagareTmux" or nil)
-      a:add(" "):add(util.fit(status_word[e.status] or e.status, 8), nagare.status_hl[e.status])
+      a:add(" "):add(util.fit(pending and "review" or (status_word[e.status] or e.status), 8), hl)
       a:add(util.fit(e.changed and util.ago(e.changed) or "", 5), "NagareDim")
       if msg_w > 8 then
-        a:add(util.fit(util.oneline(e.last_message, msg_w), msg_w), "NagareDim")
+        -- What it last said, or the task it was given before it said anything.
+        -- A waiting agent's row says what it is asking for.
+        local said = e.status == "waiting_input" and e.last_tool or e.last_message or e.task
+        a:add(util.fit(util.oneline(said, msg_w), msg_w), e.status == "waiting_input" and e.last_tool and "NagareWaiting" or "NagareDim")
       end
       -- The header already names the main checkout's branch; repeating it on
       -- every child is noise. A branch that differs is worth showing.
       local tag = e.worktree and ("⎇ " .. e.worktree) or (e.branch ~= repo.branch and e.branch) or ""
+      local changes = e.source == "nvim" and require("nagare.review").label(e) or ""
+      -- The project's checks at its last stop: ✓ passed, ✗ failed (gave up).
+      if e.verify == "pass" then
+        changes = changes .. " ✓"
+      elseif e.verify == "fail" then
+        changes = changes .. " ✗"
+      end
+      changes = vim.trim(changes)
+      if changes ~= "" then
+        tag = changes .. (tag ~= "" and ("  " .. tag) or "")
+      end
       if e.source == "tmux" then
         tag = "tmux" .. (tag ~= "" and (" · " .. tag) or "")
       end
@@ -495,9 +530,15 @@ function M.open()
   end
 
   local group = api.nvim_create_augroup("nagare_board", { clear = true })
+  -- Change counts come in the background, per agent.
+  for _, a in ipairs(agents.list) do
+    if agents.alive(a) or a.status == "dead" then
+      require("nagare.review").refresh(a)
+    end
+  end
   api.nvim_create_autocmd("User", {
     group = group,
-    pattern = "NagareStatus",
+    pattern = { "NagareStatus", "NagareReview" },
     callback = function()
       M.render()
     end,

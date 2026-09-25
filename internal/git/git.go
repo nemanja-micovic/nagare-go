@@ -5,6 +5,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -124,7 +125,43 @@ func AddWorktree(repoRoot, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git worktree add %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
+	ExcludeWorktrees(repoRoot)
 	return path, nil
+}
+
+// ExcludeWorktrees keeps nagare's worktree directory out of the main
+// checkout's status, through the repository's local exclude file — never a
+// committed .gitignore. Without it every worktree shows as untracked in the
+// main checkout, and a `git add .` there commits it as an embedded repo.
+func ExcludeWorktrees(repoRoot string) {
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "info/exclude").Output()
+	if err != nil {
+		return
+	}
+	path := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(repoRoot, path)
+	}
+	entry := "/" + worktreeDir + "/"
+	data, _ := os.ReadFile(path)
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == entry {
+			return
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	prefix := ""
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		prefix = "\n"
+	}
+	fmt.Fprintf(f, "%s# nagare worktrees\n%s\n", prefix, entry)
 }
 
 // ClaudeWorktreePath returns where `claude -w <name>` places its worktree.

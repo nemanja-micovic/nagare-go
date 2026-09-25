@@ -86,7 +86,7 @@ function M.save()
   for _, a in ipairs(M.list) do
     table.insert(out, {
       kind = a.kind, name = a.name, cwd = a.cwd, root = a.root, project = a.project,
-      worktree = a.worktree, session_id = a.session_id,
+      worktree = a.worktree, session_id = a.session_id, task = a.task,
     })
   end
   util.write_file(store_path(), vim.json.encode(out))
@@ -111,7 +111,7 @@ function M.restore()
     if type(r) == "table" and r.cwd and config.agents[r.kind] and vim.fn.isdirectory(r.cwd) == 1 then
       local a = add({
         kind = r.kind, name = r.name, cwd = r.cwd, root = r.root, project = r.project,
-        worktree = r.worktree, session_id = r.session_id,
+        worktree = r.worktree, session_id = r.session_id, task = r.task,
         status = "saved", source = "nvim", changed = os.time(), used = 0,
       })
       a.key = "saved:" .. a.id
@@ -144,6 +144,10 @@ function M.set_status(agent, status, fields)
   local held = now - (agent.changed or now)
   agent.status = status
   agent.changed = now
+  if status == "idle" or status == "waiting_input" then
+    -- It may have changed files; keep the board's change counts current.
+    require("nagare.review").refresh(agent)
+  end
   require("nagare.notify").transition(agent, prev, held, visible(agent))
   emit(agent, prev)
 end
@@ -249,7 +253,20 @@ local function start(agent, args)
   return true
 end
 
---- Starts an agent. opts: kind, cwd, name, args (extra CLI arguments).
+--- The arguments that start an agent on a task, from its `prompt` template.
+--- An agent without one gets the task typed in once it is up.
+function M.prompt_args(kind, prompt)
+  local spec = config.agents[kind] or {}
+  if not prompt or prompt == "" or not spec.prompt then
+    return {}
+  end
+  return vim.tbl_map(function(a)
+    return a == "{prompt}" and prompt or a
+  end, spec.prompt)
+end
+
+--- Starts an agent. opts: kind, cwd, name, args (extra CLI arguments),
+--- prompt (a task to start it on).
 ---@return nagare.Agent?, string?
 function M.spawn(opts)
   opts = opts or {}
@@ -273,15 +290,26 @@ function M.spawn(opts)
     source = "nvim",
   }
   agent.name = opts.name or repo.worktree or next_name(kind, repo.root)
+  agent.task = opts.prompt
   add(agent)
-  local ok, err = start(agent, opts.args)
+  local args = vim.list_extend(vim.deepcopy(opts.args or {}), M.prompt_args(kind, opts.prompt))
+  local ok, err = start(agent, args)
   if not ok then
     table.remove(M.list)
     seq = seq - 1
     return nil, err
   end
   require("nagare.status").start()
+  pcall(function()
+    require("nagare.memory").watch(agent.root)
+  end)
   require("nagare.projects").remember(agent.root)
+  if opts.prompt and opts.prompt ~= "" and not config.agents[kind].prompt then
+    -- No way to pass it on the command line: type it once the CLI is up.
+    vim.defer_fn(function()
+      M.send(agent, opts.prompt .. "\r")
+    end, 1500)
+  end
   M.save()
   emit(agent, nil)
   return agent

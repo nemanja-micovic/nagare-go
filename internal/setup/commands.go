@@ -133,7 +133,7 @@ func installCodexSkill(home string) {
 	}
 	skill := `---
 name: nagare
-description: Communicate with other AI coding-agent sessions through Nagare. Use when the user asks to list agents, send or await a message, check the inbox, or reply to another agent.
+description: Communicate with other AI coding-agent sessions through Nagare, and share what you learn through its memory. Use when the user asks to list agents, send or await a message, check the inbox, or reply to another agent; recall memories before non-trivial work; remember lessons learned the hard way.
 ---
 
 # Nagare inter-agent messaging
@@ -149,6 +149,17 @@ Use the Nagare MCP tools directly:
 Before sending, call list_agents() to resolve the target. Prefer an idle target
 before waiting for a response. Reply to every pending message that calls for an
 answer.
+
+# Nagare memory
+
+Memories are shared by every agent on this repository and survive sessions:
+
+- recall(query) searches them; use it before non-trivial work and after a
+  surprising error. get_memory(ids) reads them in full.
+- remember(text, kind) saves a lesson learned the hard way: a build or test
+  quirk, a gotcha and its root cause, a decision and why, a user preference.
+  Not task progress, not what the code already says, never secrets.
+- update_memory(id, ...) corrects, pins or archives one that is wrong.
 `
 	path := filepath.Join(dir, "SKILL.md")
 	if err := os.WriteFile(path, []byte(skill), 0644); err != nil {

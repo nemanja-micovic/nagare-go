@@ -9,20 +9,140 @@ import (
 	"time"
 
 	"github.com/nemke/nagare-go/internal/config"
+	"github.com/nemke/nagare-go/internal/memory"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/notifications"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemke/nagare-go/internal/verify"
 )
 
 // HookEvent is the JSON structure received on stdin from an agent hook,
 // plugin, or extension. Fields absent for a given agent stay empty.
 type HookEvent struct {
-	HookEventName        string `json:"hook_event_name"`
-	SessionID            string `json:"session_id"`
-	Cwd                  string `json:"cwd"`
-	LastAssistantMessage string `json:"last_assistant_message"`
-	NotificationType     string `json:"notification_type"`
+	HookEventName        string          `json:"hook_event_name"`
+	SessionID            string          `json:"session_id"`
+	Cwd                  string          `json:"cwd"`
+	LastAssistantMessage string          `json:"last_assistant_message"`
+	NotificationType     string          `json:"notification_type"`
+	ToolName             string          `json:"tool_name"`
+	ToolInput            json.RawMessage `json:"tool_input"`
+	// StopHookActive is present only in Claude Code's Stop envelope, which is
+	// also the one that honours a "block" decision; true when Claude is
+	// already continuing because a stop hook blocked it.
+	StopHookActive *bool `json:"stop_hook_active"`
+}
+
+// toolFields are the tool_input keys that say what a call is about, in the
+// order to try them.
+var toolFields = []string{"command", "file_path", "notebook_path", "url", "pattern", "query", "description", "prompt"}
+
+// DescribeTool renders a tool call as one short line — "Bash: go test ./..."
+// — so a "needs you" notification can say what it needs you for.
+func DescribeTool(name string, input json.RawMessage) string {
+	if name == "" {
+		return ""
+	}
+	var fields map[string]any
+	if len(input) > 0 {
+		_ = json.Unmarshal(input, &fields)
+	}
+	detail := ""
+	for _, k := range toolFields {
+		if v, ok := fields[k].(string); ok && strings.TrimSpace(v) != "" {
+			detail = v
+			break
+		}
+	}
+	detail = strings.Join(strings.Fields(detail), " ")
+	if r := []rune(detail); len(r) > 160 {
+		detail = string(r[:159]) + "…"
+	}
+	if detail == "" {
+		return name
+	}
+	return name + ": " + detail
+}
+
+// injectsContext lists agents whose SessionStart hook adds plain stdout to
+// the model's context. Others ignore it or want a different envelope, so they
+// get memory through the tools only.
+var injectsContext = map[string]bool{"claude": true, "codex": true}
+
+// resetsTool marks events after which the last tool call is history.
+var resetsTool = map[string]bool{"UserPromptSubmit": true, "Stop": true, "SessionStart": true, "AfterAgent": true}
+
+// Verifier finds and runs a project's checks; tests swap it out.
+type Verifier struct {
+	Find func(cwd string) string
+	Run  func(cwd, cmd string) verify.Result
+}
+
+// DefaultVerifier runs `.nagare/verify` for real.
+var DefaultVerifier = Verifier{
+	Find: verify.Find,
+	Run: func(cwd, cmd string) verify.Result {
+		return verify.Run(cwd, cmd, verify.Timeout)
+	},
+}
+
+// Decide works out the state to record for an event, and anything to print
+// on stdout for the agent. It is pure apart from the verifier, so every
+// branch is testable without a real agent.
+func Decide(ev HookEvent, prev models.SessionState, hasPrev bool, v Verifier, now string) (models.SessionState, string) {
+	st := models.SessionState{
+		State:            EventToState(ev.HookEventName, ev.NotificationType),
+		SessionID:        ev.SessionID,
+		Cwd:              ev.Cwd,
+		PaneID:           PaneID(),
+		Event:            ev.HookEventName,
+		NotificationType: ev.NotificationType,
+		LastMessage:      ev.LastAssistantMessage,
+		Timestamp:        now,
+	}
+	same := hasPrev && prev.SessionID == ev.SessionID
+	if same {
+		st.Verify, st.VerifyFailures = prev.Verify, prev.VerifyFailures
+	}
+
+	switch tool := DescribeTool(ev.ToolName, ev.ToolInput); {
+	case tool != "":
+		st.LastTool = tool
+	case resetsTool[ev.HookEventName]:
+	case same:
+		st.LastTool = prev.LastTool
+	}
+
+	if ev.HookEventName == "UserPromptSubmit" {
+		// A new request: earlier verify failures were about earlier work.
+		st.Verify, st.VerifyFailures = "", 0
+	}
+
+	// The verify gate: Claude wants to stop; the task is done only if the
+	// project's own checks agree.
+	if ev.HookEventName == "Stop" && ev.StopHookActive != nil && v.Find != nil {
+		if cmd := v.Find(ev.Cwd); cmd != "" {
+			if st.VerifyFailures >= verify.MaxAttempts {
+				// Out of attempts: let it stop, flagged, for a human.
+				st.Verify = "fail"
+				return st, ""
+			}
+			r := v.Run(ev.Cwd, cmd)
+			if r.OK {
+				st.Verify, st.VerifyFailures = "pass", 0
+				return st, ""
+			}
+			st.VerifyFailures++
+			st.Verify = "fail"
+			st.State = "working"
+			out, _ := json.Marshal(map[string]string{
+				"decision": "block",
+				"reason":   verify.Reason(cmd, r, st.VerifyFailures),
+			})
+			return st, string(out)
+		}
+	}
+	return st, ""
 }
 
 var needsInputTypes = map[string]bool{
@@ -121,7 +241,7 @@ func PaneID() string {
 
 // Handle reads a hook event from stdin and processes it.
 // Exits with code 1 on fatal errors so hook failures are visible.
-func Handle() {
+func Handle(agent string) {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nagare-go hook-state: failed to read stdin: %v\n", err)
@@ -134,25 +254,24 @@ func Handle() {
 		os.Exit(1)
 	}
 
-	newState := EventToState(event.HookEventName, event.NotificationType)
 	now := time.Now().UTC().Format(time.RFC3339)
 	statesDir := state.DefaultStatesDir()
 
 	// Load previous state for this session only
 	prevState, hasPrev := state.LoadStateByID(statesDir, event.SessionID)
 
-	// Write new state
-	newSessionState := models.SessionState{
-		State:            newState,
-		SessionID:        event.SessionID,
-		Cwd:              event.Cwd,
-		PaneID:           PaneID(),
-		Event:            event.HookEventName,
-		NotificationType: event.NotificationType,
-		LastMessage:      event.LastAssistantMessage,
-		Timestamp:        now,
+	newSessionState, stdout := Decide(event, prevState, hasPrev, DefaultVerifier, now)
+	if event.HookEventName == "SessionStart" && injectsContext[agent] {
+		// What agents learned on this repository, so this session starts
+		// where the last ones left off. Covers startup, resume, /clear and
+		// compaction, since Claude fires SessionStart for each.
+		stdout = memory.Open().Context(event.Cwd, 6000)
 	}
+	newState := newSessionState.State
 	state.WriteState(statesDir, newSessionState)
+	if stdout != "" {
+		fmt.Println(stdout)
+	}
 
 	// Determine working duration
 	var workingSeconds int

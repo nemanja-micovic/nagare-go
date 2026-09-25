@@ -7,6 +7,7 @@
 ---@field color? string sigil colour
 ---@field resume? string[] arguments that resume a session; "{id}" is its session id
 ---@field continue? string[] fallback when no session id is known
+---@field prompt? string[] arguments that start it on a task; "{prompt}" is the task text
 
 ---@class nagare.Config
 local defaults = {
@@ -17,12 +18,15 @@ local defaults = {
   -- it. `resume` restarts a known session after the editor restarted.
   ---@type table<string, nagare.AgentSpec|false>
   agents = {
-    claude = { cmd = { "claude" }, sigil = "C", color = "#da7756", resume = { "--resume", "{id}" }, continue = { "--continue" } },
-    codex = { cmd = { "codex" }, sigil = "X", color = "#10a37f", resume = { "resume", "{id}" }, continue = { "resume", "--last" } },
-    opencode = { cmd = { "opencode" }, sigil = "O", color = "#00e5ff", resume = { "--session", "{id}" }, continue = { "--continue" } },
-    gemini = { cmd = { "gemini" }, sigil = "G", color = "#4285f4" },
+    claude = { cmd = { "claude" }, sigil = "C", color = "#da7756", resume = { "--resume", "{id}" }, continue = { "--continue" },
+      prompt = { "{prompt}" } },
+    codex = { cmd = { "codex" }, sigil = "X", color = "#10a37f", resume = { "resume", "{id}" }, continue = { "resume", "--last" },
+      prompt = { "{prompt}" } },
+    opencode = { cmd = { "opencode" }, sigil = "O", color = "#00e5ff", resume = { "--session", "{id}" }, continue = { "--continue" },
+      prompt = { "--prompt", "{prompt}" } },
+    gemini = { cmd = { "gemini" }, sigil = "G", color = "#4285f4", prompt = { "-i", "{prompt}" } },
     crush = { cmd = { "crush" }, sigil = "R", color = "#ff5fd7" },
-    pi = { cmd = { "pi" }, sigil = "P", color = "#a78bfa", continue = { "-c" } },
+    pi = { cmd = { "pi" }, sigil = "P", color = "#a78bfa", continue = { "-c" }, prompt = { "{prompt}" } },
   },
 
   -- Where projects come from, besides open tabs and running agents. Globs
@@ -62,6 +66,7 @@ local defaults = {
     waiting = true, -- a toast when an agent needs you; it stays until answered
     finished = true, -- a toast when a task that ran >= min_seconds finishes
     min_seconds = 20,
+    memory = true, -- a small toast when an agent saves a memory, so a wrong one is caught early
   },
 
   -- Text :Nagare send puts in front of the agent for a range. {path} is
@@ -87,6 +92,11 @@ local defaults = {
     project = "<leader>jo",
     pick = "<leader>jf",
     send = "<leader>js",
+    memory = "<leader>jm", -- browse what agents learned on this repository
+    task = "<leader>jT", -- write a task in a buffer; :w starts an agent on it
+    review = "<leader>jd", -- review what the current (or last active) agent changed
+    next_review = "<leader>jr", -- the next agent that settled with unreviewed changes
+    comment = "<leader>jc", -- in a review: comment on the line or selection
     slots = true, -- <leader>j1..9 jump to the agent in that board slot
     -- In an agent's terminal, pressed twice: leave terminal mode, then go
     -- back to your code (or close the peek float).

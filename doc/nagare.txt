@@ -26,6 +26,16 @@ Check everything with |:checkhealth| nagare.
 COMMANDS                                                     *:Nagare*
 
 :Nagare [board]              Open the board.
+:Nagare task                 Write a task in a buffer; :w starts an agent on it.
+:Nagare review               Review this project's agent's changes.
+:Nagare next-review          Open the next agent with unreviewed changes.
+:[range]Nagare comment [text]
+                             In a review: comment on lines (sent with S).
+:Nagare fanout {n} [agents] {task}
+                             The same task in {n} worktrees (best-of-N).
+:Nagare broadcast {text}     Send to every live agent in this project.
+:Nagare memory [new|{query}] Browse, search or write memories.
+:Nagare verify [{command}]   Set or edit the checks agents must pass.
 :Nagare pick                 Fuzzy agent picker (snacks, with live preview).
 :Nagare slot {n}             Jump to the agent in slot {n}.
 :Nagare resume               Resume the agent whose terminal you are in.
@@ -48,6 +58,8 @@ MAPPINGS                                                     *nagare-mappings*
 <leader>ja toggle      <leader>jn new agent       <leader>jt worktree
 <leader>jo project     <leader>js send reference  <leader>jf find agent
 <leader>j1..9          agent in that slot
+<leader>jr next to review   <leader>jd review     <leader>jc comment
+<leader>jT task buffer      <leader>jm memory
 <C-q>      in an agent terminal: back to code, or close the peek
 
 Board: <CR> jump  p peek  a new  A pick agent  w worktree  y approve
@@ -60,6 +72,34 @@ Every key maps to a <Plug> name: <Plug>(nagare-board), (nagare-pick),
 (nagare-new), (nagare-worktree), (nagare-project), (nagare-send).
 Bind one yourself and the default is not added. Change the defaults under
 `keys`; `keys = false` adds none.
+
+==============================================================================
+REVIEW                                                          *nagare-review*
+
+An agent that settles with changes you have not seen shows as ◆ "to review".
+The review tab lists its changed files (vs where its branch split off, or vs
+HEAD for an agent in your checkout) with a side-by-side diff; the agent's side
+is the real file. <leader>jc comments on a line or selection; S sends every
+comment to that agent as one message. For a worktree agent: m runs the checks
+and merges only if they pass, F sends failures back, P opens a pull request,
+X discards the worktree and branch.
+
+==============================================================================
+VERIFY                                                          *nagare-verify*
+
+A project opts in with .nagare/verify: a shell command such as `go test ./...`
+(`:Nagare verify go test ./...`). When Claude tries to stop, nagare's hook runs
+it; on failure the stop is blocked and Claude is told why, up to 3 times. The
+board shows ✓ or ✗; merging from a review runs the same checks first.
+
+==============================================================================
+MEMORY                                                          *nagare-memory*
+
+Agents save lessons with the `remember` MCP tool and search them with
+`recall`; memories are Markdown files per repository under
+~/.local/share/nagare/memory, shared by every agent and worktree of the repo.
+Claude and Codex get a short digest when a session starts. <leader>jm browses
+them (<C-x> archive, <C-e> new); edit a note by editing its file.
 
 ==============================================================================
 NOTIFICATIONS                                            *nagare-notifications*

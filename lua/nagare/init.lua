@@ -33,6 +33,8 @@ M.status_hl = {
   saved = "NagareSaved",
 }
 
+M.review_icon = "◆"
+
 M.status_icon = {
   waiting_input = "●",
   running = "◐",
@@ -49,6 +51,7 @@ local links = {
   NagareIdle = "DiagnosticOk",
   NagareDead = "NonText",
   NagareSaved = "Comment",
+  NagareReview = "DiagnosticInfo",
   NagareProject = "Title",
   NagareDim = "Comment",
   NagareNormal = "NormalFloat",
@@ -82,11 +85,16 @@ function M.entries()
   return vim.list_extend(out, tmux.list)
 end
 
---- Counts by status across every agent.
+--- Counts by status across every agent, plus `review`: agents that settled
+--- with changes nobody has looked at yet.
 function M.summary()
-  local counts = { waiting_input = 0, running = 0, idle = 0, dead = 0, saved = 0 }
+  local counts = { waiting_input = 0, running = 0, idle = 0, dead = 0, saved = 0, review = 0 }
+  local review = package.loaded["nagare.review"]
   for _, a in ipairs(M.entries()) do
     counts[a.status] = (counts[a.status] or 0) + 1
+    if review and review.needs_review(a) then
+      counts.review = counts.review + 1
+    end
   end
   return counts
 end
@@ -99,6 +107,9 @@ function M.statusline()
     if c[s] > 0 then
       table.insert(parts, ("%%#%s#%s %d%%*"):format(M.status_hl[s], M.status_icon[s], c[s]))
     end
+  end
+  if c.review > 0 then
+    table.insert(parts, ("%%#NagareReview#%s %d%%*"):format(M.review_icon, c.review))
   end
   return table.concat(parts, " ")
 end
@@ -115,11 +126,14 @@ function M.lualine()
           table.insert(parts, ("%s %d"):format(M.status_icon[s], c[s]))
         end
       end
+      if c.review > 0 then
+        table.insert(parts, ("%s %d"):format(M.review_icon, c.review))
+      end
       return table.concat(parts, " ")
     end,
     cond = function()
       local c = M.summary()
-      return c.waiting_input + c.running > 0
+      return c.waiting_input + c.running + c.review > 0
     end,
     color = function()
       return M.summary().waiting_input > 0 and "NagareWaiting" or "NagareRunning"
@@ -303,6 +317,56 @@ function M.next_waiting(from)
   return pick
 end
 
+--- Walks the review queue like next_waiting walks the waiting one: each
+--- press opens the next agent whose changes you have not reviewed.
+function M.next_review()
+  local q = require("nagare.review").queue()
+  if #q == 0 then
+    vim.notify("nagare: nothing to review", vim.log.levels.INFO)
+    return
+  end
+  if #q > 1 then
+    vim.notify(("nagare: %d to review"):format(#q), vim.log.levels.INFO)
+  end
+  return require("nagare.review").open(q[1])
+end
+
+--- Sends text to every live agent in a project (default: the current one),
+--- pressing Enter — "stop and commit", "rebase on main", "run the tests".
+function M.broadcast(text, root)
+  root = root or projects().current_root()
+  local n = 0
+  for _, a in ipairs(agents().list) do
+    if a.root == root and agents().alive(a) and agents().send(a, text .. "\r") then
+      n = n + 1
+    end
+  end
+  vim.notify(("nagare: sent to %d agent%s in %s"):format(n, n == 1 and "" or "s", util().basename(root)),
+    vim.log.levels.INFO)
+  return n
+end
+
+--- Best-of-N: the same task in N fresh worktrees, cycling through the given
+--- agents, so you can compare the attempts and merge the winner.
+function M.fanout(n, kinds, task)
+  if not task or task == "" then
+    vim.notify("nagare: fanout needs a task", vim.log.levels.WARN)
+    return {}
+  end
+  kinds = (kinds and #kinds > 0) and kinds or { config.default_agent }
+  local base = M.slug(task)
+  local out = {}
+  for i = 1, n do
+    local kind = kinds[((i - 1) % #kinds) + 1]
+    local a = M.worktree(("%s-%d"):format(base, i), kind, task)
+    if a then
+      a.group = base
+      table.insert(out, a)
+    end
+  end
+  return out
+end
+
 --- The editor's agents in slot order: creation order, which never changes
 --- under you the way urgency order does, so a slot is muscle memory.
 function M.slots()
@@ -323,7 +387,7 @@ end
 function M.new(opts)
   opts = opts or {}
   local cwd = opts.cwd or projects().current_root()
-  local agent, err = agents().spawn({ kind = opts.kind, cwd = cwd, name = opts.name, args = opts.args })
+  local agent, err = agents().spawn({ kind = opts.kind, cwd = cwd, name = opts.name, args = opts.args, prompt = opts.prompt })
   if not agent then
     vim.notify("nagare: " .. err, vim.log.levels.ERROR)
     return
@@ -346,16 +410,37 @@ function M.choose(root)
       return ("%s  %s%s"):format(M.sigil(kind), kind, installed and "" or "  (not installed)")
     end,
   }, function(kind)
-    if kind then
-      M.new({ kind = kind, cwd = root })
+    if not kind then
+      return
     end
+    vim.ui.input({ prompt = "Task (optional, Enter to just start): " }, function(task)
+      if task == nil then
+        return -- cancelled
+      end
+      M.new({ kind = kind, cwd = root, prompt = task ~= "" and task or nil })
+    end)
   end)
 end
 
---- Creates a worktree in the current project and starts an agent in it.
-function M.worktree(name, kind)
-  local function go(n)
-    if not n or n == "" then
+--- A worktree name from a task: "Fix the login redirect" -> "fix-login-redirect".
+function M.slug(text)
+  local stop = { a = true, an = true, the = true, to = true, of = true, ["and"] = true, ["in"] = true, on = true, ["for"] = true }
+  local words = {}
+  for w in text:lower():gmatch("[%w]+") do
+    if not stop[w] and #words < 5 then
+      table.insert(words, w)
+    end
+  end
+  local s = table.concat(words, "-")
+  return s ~= "" and s or ("task-" .. os.time())
+end
+
+--- Creates a worktree in the current project and starts an agent in it,
+--- optionally on a task. With only a task, the worktree is named after it.
+function M.worktree(name, kind, prompt)
+  local function go(n, task)
+    n = (n and n ~= "") and n or (task and task ~= "" and M.slug(task))
+    if not n then
       return
     end
     local path, err = projects().add_worktree(projects().current_root(), n)
@@ -363,12 +448,22 @@ function M.worktree(name, kind)
       vim.notify("nagare: " .. err, vim.log.levels.ERROR)
       return
     end
-    return M.new({ cwd = path, kind = kind, name = n })
+    return M.new({ cwd = path, kind = kind, name = n, prompt = task })
   end
-  if name then
-    return go(name)
+  if name or prompt then
+    return go(name, prompt)
   end
-  vim.ui.input({ prompt = "Worktree name: " }, go)
+  vim.ui.input({ prompt = "Task for the new worktree agent (or just a name): " }, function(text)
+    if not text or text == "" then
+      return
+    end
+    -- One word is a name; a sentence is a task the worktree is named after.
+    if text:find("%s") then
+      go(nil, text)
+    else
+      go(text, nil)
+    end
+  end)
 end
 
 --- Shows or hides the current project's agent. Starts one if the project
@@ -472,6 +567,31 @@ function M.board()
   require("nagare.board").open()
 end
 
+--- Reviews an agent's changes: the agent under the cursor, else this
+--- project's agent with the most recent activity that changed anything.
+function M.review(agent)
+  agent = agent or agents().from_buf(0)
+  if not agent then
+    local root = projects().current_root()
+    local review = require("nagare.review")
+    local best
+    for _, a in ipairs(agents().list) do
+      if a.root == root and a.status ~= "saved" then
+        local s = review.summary(a)
+        if s and s.files > 0 and (not best or (a.changed or 0) > (best.changed or 0)) then
+          best = a
+        end
+      end
+    end
+    agent = best
+  end
+  if not agent then
+    vim.notify("nagare: no agent in this project has changed anything", vim.log.levels.INFO)
+    return
+  end
+  return require("nagare.review").open(agent)
+end
+
 --- A fuzzy agent picker: snacks' picker when available (with a live
 --- preview of each agent's screen), else vim.ui.select.
 function M.pick()
@@ -500,6 +620,11 @@ M.descriptions = {
   ["<Plug>(nagare-project)"] = "Open project",
   ["<Plug>(nagare-pick)"] = "Find agent",
   ["<Plug>(nagare-send)"] = "Send reference to agent",
+  ["<Plug>(nagare-review)"] = "Review agent changes",
+  ["<Plug>(nagare-memory)"] = "Agent memory",
+  ["<Plug>(nagare-task)"] = "New task (buffer)",
+  ["<Plug>(nagare-next-review)"] = "Next agent to review",
+  ["<Plug>(nagare-comment)"] = "Review comment",
 }
 
 local function map(lhs, plug, modes)
@@ -530,6 +655,11 @@ local function keymaps()
   map(keys.project, "<Plug>(nagare-project)")
   map(keys.pick, "<Plug>(nagare-pick)")
   map(keys.send, "<Plug>(nagare-send)", { "n", "x" })
+  map(keys.review, "<Plug>(nagare-review)")
+  map(keys.memory, "<Plug>(nagare-memory)")
+  map(keys.task, "<Plug>(nagare-task)")
+  map(keys.next_review, "<Plug>(nagare-next-review)")
+  map(keys.comment, "<Plug>(nagare-comment)", { "n", "x" })
   if keys.slots and keys.prefix then
     for n = 1, 9 do
       local plug = ("<Plug>(nagare-slot-%d)"):format(n)
@@ -597,6 +727,9 @@ function M._init()
     group = group,
     callback = function()
       agents().shutdown()
+      pcall(function()
+        require("nagare.memory").stop()
+      end)
       require("nagare.status").stop()
       require("nagare.tmux").stop()
     end,

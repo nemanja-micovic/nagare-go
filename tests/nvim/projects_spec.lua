@@ -19,6 +19,13 @@ return {
     eq(util.describe(plain).root, util.normalize(plain), "non-repo is its own project")
   end },
 
+  { "add_worktree: worktrees stay out of the main checkout's status", function()
+    local repo = git_repo("wt-exclude")
+    assert(projects.add_worktree(repo, "a"))
+    assert(projects.add_worktree(repo, "b"))
+    eq(vim.fn.system({ "git", "-C", repo, "status", "--porcelain" }), "")
+  end },
+
   { "add_worktree: rejects names git or the shell would mangle", function()
     local repo = git_repo("badnames")
     for _, n in ipairs({ "../escape", "-rf", "a b", "" }) do

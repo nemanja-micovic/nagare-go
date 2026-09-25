@@ -297,3 +297,26 @@ func TestRemoveWorktreeLocked(t *testing.T) {
 		t.Error("locked worktree still exists after removal")
 	}
 }
+
+func TestAddWorktreeKeepsItOutOfTheMainStatus(t *testing.T) {
+	root := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "i"}} {
+		if out, err := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	if _, err := AddWorktree(root, "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddWorktree(root, "two"); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := exec.Command("git", "-C", root, "status", "--porcelain").Output()
+	if strings.TrimSpace(string(out)) != "" {
+		t.Errorf("worktrees show in the main checkout's status: %q", out)
+	}
+	data, _ := os.ReadFile(filepath.Join(root, ".git", "info", "exclude"))
+	if n := strings.Count(string(data), "/.worktrees/"); n != 1 {
+		t.Errorf("exclude entry written %d times:\n%s", n, data)
+	}
+}

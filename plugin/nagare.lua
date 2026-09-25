@@ -31,6 +31,10 @@ local plugs = {
   worktree = function() require("nagare").worktree() end,
   project = function() require("nagare.projects").pick() end,
   pick = function() require("nagare").pick() end,
+  review = function() require("nagare").review() end,
+  memory = function() require("nagare.memory").pick() end,
+  task = function() require("nagare.task").new() end,
+  ["next-review"] = function() require("nagare").next_review() end,
 }
 for name, fn in pairs(plugs) do
   vim.keymap.set("n", "<Plug>(nagare-" .. name .. ")", fn)
@@ -41,6 +45,8 @@ for n = 1, 9 do
   end)
 end
 vim.keymap.set("n", "<Plug>(nagare-send)", "<Cmd>Nagare send<CR>")
+vim.keymap.set("n", "<Plug>(nagare-comment)", "<Cmd>Nagare comment<CR>")
+vim.keymap.set("x", "<Plug>(nagare-comment)", ":Nagare comment<CR>", { silent = true })
 vim.keymap.set("x", "<Plug>(nagare-send)", ":Nagare send<CR>", { silent = true })
 
 -- After startup (and after a setup() call made while loading, as lazy.nvim

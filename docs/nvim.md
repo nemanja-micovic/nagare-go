@@ -27,6 +27,73 @@ This is **not a chat panel**. There's no prompt box and no chat buffer, and the 
 run unmodified and full-screen. The plugin is about **navigation**: which agent needs me,
 in which project, and how to get there in one key.
 
+## The loop
+
+A second survey in September 2026 covered the orchestration tools: Claude Code desktop,
+Codex, Cursor, Antigravity, Conductor, Vibe Kanban, Jules, Copilot agent, Kiro/spec-kit,
+StrongDM's software factory, and claude-squad/uzi/workmux. Every serious one converged on
+the same loop:
+
+**task → agent in a worktree → checks → review with comments sent back → land.**
+
+That loop is buffers, quickfix, diff mode and `chansend`. Neovim already has all four.
+Every competitor had to build a diff viewer and a comment UI from scratch. The five Neovim
+review plugins that exist (tuicr, review.nvim, hunk-review, agent-review, doubt.nvim) all
+stop at the clipboard, because none of them knows which agent owns the diff. nagare does.
+
+| Step | In nagare.nvim |
+|---|---|
+| **Task** | `<leader>jT` opens a Markdown buffer. Write the brief, then `:w`. The header sets the agent, whether it gets a worktree, plan mode (it proposes before it edits), and `count: 3` for best-of-N. `<leader>jt` does the same from one line. |
+| **Agent** | It starts in `.worktrees/<task-slug>` on its own branch. `.worktrees/` goes into the repo's local exclude file, so it never shows as untracked. |
+| **Checks** | A project opts in with `.nagare/verify` (`:Nagare verify go test ./...`). When Claude tries to stop, the hook runs it. If it fails, the stop is **blocked** and Claude gets the failure output and keeps working, up to 3 attempts. The board shows ✓ or ✗. |
+| **Attention** | Toasts say what a waiting agent is asking for (`Bash: rm -rf build`). `<leader>jw` walks everything waiting. Agents that settled with changes you haven't seen become **◆ to review**, and `<leader>jr` walks that queue. |
+| **Review** | `d` on the board (or `<leader>jd`) opens a review tab. Changed files are on the left. On the right is a side-by-side diff against where the branch split off, and the agent's side is the real, editable file. `<leader>jc` comments on a line or selection. `S` sends every comment to *that agent* as one message. |
+| **Land** | `m` runs the checks in a terminal and merges only if they pass. `F` sends the failures back to the agent. `P` pushes and opens a PR. `X` discards the worktree and branch. |
+| **Memory** | What agents learn is saved for the next session and for sibling agents on the repo. See below. |
+
+`:Nagare fanout 3 claude,codex <task>` runs the same task in three worktrees. Review them
+side by side and merge the winner. `:Nagare broadcast <text>` sends one message to every
+agent in the project ("rebase on main", "run the tests").
+
+## Memory
+
+Agents keep relearning the same things about a repository: the build quirk, the flaky test,
+the decision nobody wrote down. nagare gives every agent a shared memory, per repository
+plus a global scope. The design came from a survey of MemPalace, mem0, Hindsight, mnemopi,
+Letta, Zep/Graphiti, Basic Memory, claude-mem, Serena, Cursor memories and Anthropic's
+memory tool.
+
+- **Files are the truth.** One Markdown file per memory, with front matter, under
+  `~/.local/share/nagare/memory/projects/<repo>-<hash>/`. All worktrees of a repo share it.
+  A human edits a memory by editing its file.
+- **BM25 search, computed per query.** Identifiers are split, so a search for `fitBox`
+  also matches "fit box". Results are boosted for project scope, recency, use and the files
+  you're working on. There is no database, embedding model or API key. A repo's memory is
+  tens to hundreds of notes: milliseconds to scan, and a scan can't go stale the way a cache
+  shared by six agent processes and an editor would. Letta's filesystem benchmark (74% on
+  LoCoMo with plain file tools) is the evidence that this is enough.
+- **Written on purpose.** Agents call `remember` through MCP (all six agents; pi through the
+  bridge). A near-duplicate is refused with the existing memory named, anything that looks
+  like a secret is rejected, and nothing is hard-deleted: replaced memories are archived.
+  A wrong memory makes every future session worse, so precision beats recall.
+- **Tools:** `remember`, `recall` (compact one-liners), `get_memory` (full text, counts as a
+  use), `update_memory` (correct, pin, archive).
+- **Injected at session start.** Claude and Codex get a short digest in their SessionStart
+  hook (`hook-state --agent claude`): pinned notes, conventions, what was learned in the
+  last week by any agent on the repo, and how many more exist. It's labelled as data, not
+  instructions, and capped in size. Claude fires SessionStart after `/clear` and compaction
+  too, so memory survives both.
+- **In Neovim:** `<leader>jm` opens a picker with a file preview. Enter opens the note as a
+  normal buffer, `<C-x>` archives it, `<C-e>` writes a new one. A toast shows each memory
+  an agent saves ("🧠 claude@api remembered (gotcha): …"), so a bad one gets caught early.
+- **CLI:** `nagare-go memory ls | search | add | context | path [--json]`.
+
+Deferred until there's a need:
+- automatic capture from transcripts, with an approval inbox;
+- embeddings through `modernc.org/sqlite/vec`;
+- staleness checks against git;
+- a "gardener" agent that consolidates notes.
+
 ## Where it stands among Neovim plugins
 
 We surveyed the field in September 2026:
@@ -199,8 +266,8 @@ for the list) and merges those agents into the same projects, tagged `tmux`.
 
 ## Verified
 
-- **63 headless specs** (`tests/nvim/`), including end to end through the real
-  `nagare-go hook-state`. They pass on Neovim 0.11.4.
+- **89 headless specs** (`tests/nvim/`), including end to end through the real
+  `nagare-go hook-state` and `nagare-go memory`. They pass on Neovim 0.11.4.
   - Direct binary downloads are blocked in the build sandbox, so 0.11.4 was built from
     source, with its dependencies fetched by `git`.
   - Run: `nvim --headless --clean -l tests/nvim/run.lua`.
@@ -229,10 +296,12 @@ for the list) and merges those agents into the same projects, tagged `tmux`.
 
 ## Next, from the research (not built yet)
 
-1. **Worktree diff review from the board.** Review an agent's worktree changes against the
-   merge base: quickfix, then diffview, then merge, discard or keep. The review loop is the
-   frontier, and Neovim is the best place for it.
-2. **A resession extension** that restores tab and window placement along with agents.
+1. **Usage and cost per agent**: tokens, cost and context % from the agent's session log
+   (or ccusage), shown on the board row and in lualine.
+2. **An approval inbox with autonomy presets**: answer PreToolUse from an allow/deny list
+   per project (Antigravity's Off/Auto/Turbo). Only what's left reaches you.
+3. **The CI loop**: after `P`, poll `gh pr checks` for that agent and send failing jobs back.
+4. **A resession extension** that restores tab and window placement along with agents.
 3. **Jump-mode letters** over waiting agents, tabby/barbar style.
 4. **Mailbox and MCP messaging** surfaced on the board.
 5. **Opt-in claudecode.nvim interop**, passing `CLAUDE_CODE_SSE_PORT` so diffs open in
@@ -274,28 +343,40 @@ Requires Neovim 0.10+ (LazyVim itself needs 0.11).
 | Key | Action |
 |---|---|
 | `<leader>jj` | board |
-| `<leader>jf` | find agent (snacks picker, with a live preview) |
 | `<leader>jw` | next waiting agent (walks the queue, wrapping) |
+| `<leader>jr` | next agent **to review** (settled with changes you haven't seen) |
+| `<leader>jd` | review this project's agent's changes |
+| `<leader>jc` | in a review diff: comment on the line / selection |
+| `<leader>jT` | new task in a buffer (`:w` starts it) |
+| `<leader>jt` | new worktree agent from a one-line task |
+| `<leader>jm` | memory: what agents learned on this repo |
+| `<leader>jf` | find agent (snacks picker, live preview) |
 | `<leader>j1`–`9` | agent in that slot |
 | `<leader>jp` | peek the most urgent agent |
-| `<leader>ja` | toggle this project's agent split (starts one if there is none) |
-| `<leader>jn` | new agent (choose which) |
-| `<leader>jt` | new worktree + agent |
+| `<leader>ja` | toggle this project's agent split |
+| `<leader>jn` | new agent (choose which, optional task) |
 | `<leader>jo` | open a project |
-| `<leader>js` | send `@file#Lx-y` of the selection or line |
+| `<leader>js` | send `@file#Lx-y` of the selection / line |
 | `<C-q>` (in agent) | back to code / close peek |
 
-Each has a `<Plug>(nagare-…)` equivalent: board, find, next, slot-N, peek, toggle, new,
-worktree, project, send.
+Every key has a `<Plug>(nagare-…)` mapping.
 
 **Board:**
-- `⏎` jump · `p` peek · `a`/`A` new agent · `y`/`Y` approve (always) · `n` next waiting
-- `w` worktree · `c` resume · `x` kill/forget · `r` rename · `o` project · `R` refresh
-- `1`–`9` slot · `g?` help · `q` close
+- `⏎` jump · `p` peek · `d` review · `y`/`Y` approve (always) · `n` next waiting
+- `a`/`A` new agent · `w` worktree · `c` resume · `x` kill/forget · `r` rename
+- `o` project · `R` refresh · `1`–`9` slot · `g?` help · `q` close
 
-**Picker:** `<c-y>` approve · `<c-o>` peek · `<c-x>` kill/forget.
+**Review tab:**
+- On the file list: `⏎` diff · `c` comment · `S` send review · `m` verify + merge ·
+  `F` send failures · `P` pull request · `X` discard · `R` refresh · `q` close
+- In the diff: `<leader>jc` comment · `Tab`/`S-Tab` next/prev file
+
+**Pickers:**
+- Agents: `<c-y>` approve · `<c-o>` peek · `<c-x>` kill/forget
+- Memory: `<c-x>` archive · `<c-e>` new
 
 **Commands:** `:Nagare` followed by one of:
-`board`, `pick`, `next`, `peek`, `toggle`, `slot N`, `new [agent] [dir]`,
-`worktree <name> [agent]`, `project [dir]`, `send [text]`, `rename <name>`, `resume`,
-`detach`.
+`board`, `pick`, `next`, `next-review`, `review`, `comment`, `task`, `peek`, `toggle`,
+`slot N`, `new [agent] [dir]`, `worktree <name> [agent]`, `fanout N [agents] <task>`,
+`broadcast <text>`, `memory [new|query]`, `verify [cmd]`, `project [dir]`, `send [text]`,
+`rename <name>`, `resume`, `detach`.

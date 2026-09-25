@@ -73,6 +73,9 @@ type SessionState struct {
 	Event            string `json:"event"`
 	NotificationType string `json:"notification_type,omitempty"`
 	LastMessage      string `json:"last_message,omitempty"`
+	LastTool         string `json:"last_tool,omitempty"`       // what the agent is doing or asking to do, e.g. "Bash: go test ./..."
+	Verify           string `json:"verify,omitempty"`          // "pass" or "fail": the project's .nagare/verify at the last stop
+	VerifyFailures   int    `json:"verify_failures,omitempty"` // stops blocked by verify since the last prompt
 	Timestamp        string `json:"timestamp"`
 }
 

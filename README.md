@@ -116,8 +116,15 @@ return {
 }
 ```
 
-`<leader>jj` opens the board, `<leader>jw` jumps to the next waiting agent, and
-`nagare-go nvim` keeps agents alive after the terminal closes. See
+It runs the whole loop in Neovim:
+- write a task in a buffer and `:w` to start a worktree agent (`<leader>jT`);
+- agents can't finish until your checks pass (`.nagare/verify`);
+- review their diff and send comments back to the agent that wrote it (`<leader>jr`);
+- merge only when the checks pass.
+
+Agents also share a memory per repository (`remember`/`recall`), so they stop relearning
+the same things. `<leader>jj` opens the board, `<leader>jw` jumps to the next waiting agent,
+and `nagare-go nvim` keeps agents alive after the terminal closes. See
 [docs/nvim.md](docs/nvim.md).
 
 ## Configuration

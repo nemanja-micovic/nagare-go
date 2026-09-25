@@ -137,6 +137,73 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "remember",
+    label: "Nagare: remember",
+    description:
+      "Save a lesson for future sessions and the other agents on this repository: something learned the hard way that is not obvious from the code (a build quirk, a gotcha and its cause, a decision and why, a user preference). Not task progress, not secrets. First line is the title.",
+    promptSnippet: "Save a lesson learned to the shared nagare memory",
+    parameters: Type.Object({
+      text: Type.String({ description: "one self-contained memory; first line is a short title" }),
+      kind: Type.Optional(Type.String({ description: "gotcha, decision, convention, fact or preference" })),
+      tags: Type.Optional(Type.Array(Type.String())),
+      paths: Type.Optional(Type.Array(Type.String(), { description: "repo-relative files it concerns" })),
+      scope: Type.Optional(Type.String({ description: "project (default) or global" })),
+      supersedes: Type.Optional(Type.Array(Type.String(), { description: "ids this replaces" })),
+      force: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "remember", params, signal);
+    },
+  });
+
+  pi.registerTool({
+    name: "recall",
+    label: "Nagare: recall",
+    description:
+      "Search memories saved by agents and the user on this repository. Use before non-trivial work and after surprising errors; fetch full text with get_memory.",
+    promptSnippet: "Search the shared nagare memory for this repository",
+    parameters: Type.Object({
+      query: Type.String({ description: "identifiers, error text or topics" }),
+      kind: Type.Optional(Type.String()),
+      scope: Type.Optional(Type.String()),
+      paths: Type.Optional(Type.Array(Type.String())),
+      limit: Type.Optional(Type.Number()),
+    }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "recall", params, signal);
+    },
+  });
+
+  pi.registerTool({
+    name: "get_memory",
+    label: "Nagare: get memory",
+    description: "Read memories in full, by id (from recall).",
+    promptSnippet: "Read nagare memories in full",
+    parameters: Type.Object({ ids: Type.Array(Type.String()) }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "get_memory", params, signal);
+    },
+  });
+
+  pi.registerTool({
+    name: "update_memory",
+    label: "Nagare: update memory",
+    description:
+      "Correct, retag, pin or archive (status=archived) a memory. The previous version is kept.",
+    promptSnippet: "Correct or archive a nagare memory",
+    parameters: Type.Object({
+      id: Type.String(),
+      text: Type.Optional(Type.String()),
+      tags: Type.Optional(Type.Array(Type.String())),
+      status: Type.Optional(Type.String({ description: "active or archived" })),
+      pinned: Type.Optional(Type.Boolean()),
+    }),
+    async execute(_id, params, signal) {
+      return callTool(pi, "update_memory", params, signal);
+    },
+  });
+
+  pi.registerTool({
     name: "reply",
     label: "Nagare: reply",
     description:

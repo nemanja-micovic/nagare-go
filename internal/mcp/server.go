@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/nemke/nagare-go/internal/memory"
 )
 
 func textResult(s string) (*mcp.CallToolResult, any, error) {
@@ -55,6 +57,23 @@ func RunServer() error {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input ReplyInput) (*mcp.CallToolResult, any, error) {
 		return textResult(ReplyHandler(mySession, input))
 	})
+
+	mcp.AddTool(server, &mcp.Tool{Name: "remember", Description: rememberDesc},
+		func(ctx context.Context, req *mcp.CallToolRequest, input memory.RememberInput) (*mcp.CallToolResult, any, error) {
+			return textResult(RememberHandler(mySession, memoryCwd(), input))
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "recall", Description: recallDesc},
+		func(ctx context.Context, req *mcp.CallToolRequest, input memory.RecallInput) (*mcp.CallToolResult, any, error) {
+			return textResult(RecallHandler(memoryCwd(), input))
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "get_memory", Description: getDesc},
+		func(ctx context.Context, req *mcp.CallToolRequest, input memory.GetInput) (*mcp.CallToolResult, any, error) {
+			return textResult(GetMemoryHandler(memoryCwd(), input))
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: "update_memory", Description: updateDesc},
+		func(ctx context.Context, req *mcp.CallToolRequest, input memory.UpdateInput) (*mcp.CallToolResult, any, error) {
+			return textResult(UpdateMemoryHandler(memoryCwd(), input))
+		})
 
 	return server.Run(context.Background(), &mcp.StdioTransport{})
 }

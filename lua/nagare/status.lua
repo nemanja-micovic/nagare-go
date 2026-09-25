@@ -46,6 +46,8 @@ function M.apply(state)
   agents.set_status(agent, status, {
     session_id = (state.session_id and state.session_id ~= "") and state.session_id or agent.session_id,
     event = state.event,
+    last_tool = state.last_tool ~= "" and state.last_tool or nil,
+    verify = state.verify ~= "" and state.verify or nil,
     notification_type = state.notification_type,
     last_message = (state.last_message and state.last_message ~= "") and state.last_message or agent.last_message,
   })

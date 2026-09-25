@@ -2,12 +2,16 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/nemke/nagare-go/internal/memory"
 )
 
 func TestToolNamesCoversEveryMCPTool(t *testing.T) {
-	want := []string{"check_messages", "list_agents", "reply", "send_message", "send_message_and_wait"}
+	want := []string{"check_messages", "get_memory", "list_agents", "recall", "remember", "reply",
+		"send_message", "send_message_and_wait", "update_memory"}
 	got := ToolNames()
 	if len(got) != len(want) {
 		t.Fatalf("ToolNames() = %v, want %v", got, want)
@@ -58,5 +62,40 @@ func TestDecodeArgsPopulatesInput(t *testing.T) {
 	}
 	if input.Target != "api" || input.Message != "hi" || input.Timeout != 5 {
 		t.Errorf("decoded = %+v", input)
+	}
+}
+
+func TestMemoryToolsThroughTheBridge(t *testing.T) {
+	dir := t.TempDir()
+	root := t.TempDir()
+	orig := memoryStore
+	memoryStore = func() *memory.Store { return &memory.Store{Root: root} }
+	defer func() { memoryStore = orig }()
+	wd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(wd)
+
+	out, err := RunTool(context.Background(), "remember", []byte(`{"text":"Integration tests need docker compose up first","kind":"gotcha"}`))
+	if err != nil || !strings.HasPrefix(out, "Saved as [m") {
+		t.Fatalf("remember: %q %v", out, err)
+	}
+	id := out[len("Saved as [") : len("Saved as [")+6]
+	out, _ = RunTool(context.Background(), "recall", []byte(`{"query":"integration tests docker"}`))
+	if !strings.Contains(out, id) || !strings.Contains(out, "Integration tests need docker") {
+		t.Errorf("recall: %q", out)
+	}
+	out, _ = RunTool(context.Background(), "get_memory", []byte(`{"ids":["`+id+`"]}`))
+	if !strings.Contains(out, "docker compose up first") {
+		t.Errorf("get_memory: %q", out)
+	}
+	out, _ = RunTool(context.Background(), "update_memory", []byte(`{"id":"`+id+`","status":"archived"}`))
+	if !strings.Contains(out, "archived") {
+		t.Errorf("update_memory: %q", out)
+	}
+	out, _ = RunTool(context.Background(), "recall", []byte(`{"query":"docker"}`))
+	if !strings.HasPrefix(out, "No memories match") {
+		t.Errorf("archived memory still recalled: %q", out)
 	}
 }

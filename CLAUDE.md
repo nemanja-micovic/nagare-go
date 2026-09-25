@@ -30,6 +30,7 @@ nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
 nagare-go ls               # tmux agents as JSON (read by the Neovim plugin)
 nagare-go nvim [name]      # attach to a persistent headless Neovim that owns agents
+nagare-go memory ls|search|add|context|path [--json]  # shared agent memory
 ```
 
 ## Neovim plugin (experiment)
@@ -60,9 +61,114 @@ install spec in `docs/nvim.md`. Requires Neovim 0.10+.
 - LazyVim: keys under `<leader>j` (verified free; LazyVim owns `<leader>n` and `<leader>a`),
   which-key group, `"nagare"` lualine component, snacks picker source (`<c-y>/<c-o>/<c-x>`
   — `<c-p>` clashes with snacks), dashboards count as an untouched tab.
+- The loop: task buffer (`task.lua`) → worktree agent → verify gate → review tab
+  (`review.lua`: diff vs merge-base, comments sent to the owning agent, verify-gated merge)
+  → land. Review marks are keyed by the agent's cwd; the fingerprint includes mtimes.
+- In a review diff the right side is the real file — never bind bare letters there; review
+  keys in diff buffers are `<leader>jc` and `Tab`/`S-Tab`.
+- nagare's `.worktrees/` is added to the repo's `.git/info/exclude` on creation (Go and Lua);
+  otherwise `git add .` in the main checkout commits worktrees as embedded repos.
+- Verify gate: `hooks.Decide` is the pure core of `hook-state`. It blocks a Claude `Stop`
+  (only envelopes with `stop_hook_active` can honour it) when `.nagare/verify` fails, max
+  `verify.MaxAttempts`; Claude's Stop hook timeout is `stopHookTimeout` (600s) > `verify.Timeout`.
+  Verify kills its whole process group on timeout.
+- `hook-state --agent claude|codex` enables the SessionStart memory digest; other agents get
+  memory through tools only. Hook stdout must stay empty for every other event.
+- Memory: files are the truth (one per memory), no DB; `remember` refuses near-duplicates and
+  secrets; nothing is hard-deleted (archive/). MCP tools, the pi bridge and the Codex skill
+  must list the same tools — tests enforce it.
+- Snacks picker keys must avoid snacks' defaults (`<c-n>`, `<c-p>`, `<c-a>`… taken).
 - Board: one key table drives maps (with desc), hint line and `g?` help; hint line trimmed
   in drop order with `q close` reserved; highlights via extmarks; `board_spec` checks every
   line fits. Floats over the board must not close it.
+
+## Architecture
+
+Single binary with cobra subcommands. All code in `internal/` packages.
+
+- `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
+- `internal/config` — TOML config loading + saving
+- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
+- `internal/git` — resolves a directory into branch, repo name, and worktree name (one `rev-parse` per path)
+- `internal/state` — state files + session registry
+- `internal/hooks` — hook handler (stdin JSON → state files → notifications)
+- `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
+- `internal/picker` — Bubble Tea TUI (list/grid views, overlays, keybindings, mouse)
+- `internal/notifs` — notification center TUI
+- `internal/popup` — popup notification TUI
+- `internal/session` — session creation + path resolution
+- `internal/newsession` — new session + quick prototype forms
+- `internal/theme` — 13 themes on a derived design-token layer (see Themes), self-registering via init()
+- `internal/setup` — status reporting + MCP + slash command installation for every agent
+- `internal/mcp` — MCP server for inter-agent messaging, plus the CLI tool bridge
+- `internal/bin` — shared binary finder
+- `internal/fsutil` — atomic file writes
+- `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
+- `internal/memory` — shared agent memory: Markdown files + per-query BM25, MCP tools, SessionStart digest
+- `internal/verify` — runs a project's `.nagare/verify` when an agent stops (the verify gate)
+- `internal/nvim` — `nagare-go ls` (tmux agents as JSON) and `nagare-go nvim` (persistent runtime)
+
+### Worktrees
+
+Each agent pane resolves its own directory from `pane_current_path`, not the tmux
+session path, so panes in different worktrees of one repo get their own path, branch,
+and name (`{session}/{worktree}`). Worktree detection is structural — the git common
+dir's parent differs from the toplevel — so hand-made worktrees work the same as
+Claude Code's `.claude/worktrees/`.
+
+Display-name precedence is: a window name the user set, then the worktree, then
+`{agent}_NN`.
+
+Worktree sessions are created by `session.CreateWorktree`. Claude Code has its own
+`-w <name>` flag, so it is handed the flag and creates the worktree under
+`.claude/worktrees/`; every other agent has no equivalent, so nagare runs
+`git worktree add` into `.worktrees/` and opens the pane there. `--tmux` is never
+passed to Claude — nagare already made the window.
+
+A worktree pane always joins its repo's existing tmux session as a new window, which is
+what lets the picker group them. Sessions are matched to a repo through
+`git.MainRoot`, not by literal path, because a session's own directory is often a
+worktree.
+
+Because worktrees are windows in one session, Ctrl+x kills the *window* whenever a
+session holds more than one agent pane — killing the session would take a repo's other
+worktrees with it. On a worktree pane it then offers removal; `git.RemoveWorktree` never
+passes `--force`, so git refuses while there is uncommitted work, and the branch is left
+intact.
+
+Worktree creation runs as a `tea.Cmd`, never inline: doing it in the update loop froze
+the TUI for seconds. A spinner shows until the new agent pane appears in a scan
+(`pendingWorktree.satisfiedBy`) rather than until nagare's own work returns, because
+`claude -w` needs seconds more to build the worktree and start. Failures surface in the
+status line instead of only reaching the log.
+
+Removal is confirmed by a centred dialog (`renderConfirmOverlay`) drawn with
+`placeOverlay`, like the help and theme overlays; only `y`/`n`/`esc` answer it. Claude
+locks the worktrees it creates, so `git.RemoveWorktree` checks cleanliness itself,
+unlocks, then removes without `--force` — passing `--force` would override the dirty
+guard too.
+
+The detail pane shows outstanding work (`git.WorkStatus`) and warns when two agents
+share one directory. Work is cached per path and refreshed per scan: the pane
+re-renders every frame for the status-dot pulse, so git must never be called from
+render.
+
+List rows show a colored one-cell agent sigil (`C` for Claude Code, `X` for Codex,
+etc.) beside the name and the git branch in the right-hand column. Keeping both visible
+matters when one tmux session mixes agents whose generated pane names look similar.
+`branchFor` suppresses a branch that only repeats the row — Claude names a worktree's
+branch `worktree-<name>` — checking the worktree name as well as the label, since a lone
+pane in a worktree is labelled with its full `{session}/{worktree}` name.
+`splitRowWidth` divides the row: the label takes what it needs but never squeezes the
+branch below `minBranchWidth`.
+
+In the list view, sessions sharing a tmux session name are grouped under a single
+header row naming the repo, and children show only their own name — so the repo
+prefix is not repeated on every row. Lone sessions also get a header and one indented
+agent child, keeping the tree and agent sigils aligned across the list. One blank row
+separates project blocks. A group takes the position of its most urgent member, so a
+waiting worktree lifts its whole repo. Rows are derived per frame by
+`picker.buildRows`; the cursor keeps indexing sessions, not rows. Grid view stays flat.
 
 ## Agent Integrations
 

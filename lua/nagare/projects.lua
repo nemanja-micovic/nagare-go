@@ -59,7 +59,8 @@ function M.tab_for(root)
   -- A tab the user :tcd'd into by hand counts too.
   for _, tab in ipairs(api.nvim_list_tabpages()) do
     local nr = api.nvim_tabpage_get_number(tab)
-    if vim.fn.haslocaldir(-1, nr) == 1 then
+    local review = pcall(api.nvim_tabpage_get_var, tab, "nagare_review")
+    if not review and vim.fn.haslocaldir(-1, nr) == 1 then
       local dir = util.normalize(vim.fn.getcwd(-1, nr))
       if util.describe(dir).root == root then
         api.nvim_tabpage_set_var(tab, "nagare_root", root)
@@ -226,6 +227,27 @@ function M.pick(cb)
   end)
 end
 
+--- Keeps .worktrees/ out of the main checkout's status via the repo's local
+--- exclude file (never a committed .gitignore). Otherwise every worktree is
+--- an untracked directory there, and `git add .` commits it.
+function M.exclude_worktrees(root)
+  local path = vim.fn.system({ "git", "-C", root, "rev-parse", "--git-path", "info/exclude" }):gsub("%s+$", "")
+  if vim.v.shell_error ~= 0 or path == "" then
+    return
+  end
+  if not path:match("^/") then
+    path = root .. "/" .. path
+  end
+  local lines = vim.fn.filereadable(path) == 1 and vim.fn.readfile(path) or {}
+  if vim.tbl_contains(lines, "/.worktrees/") then
+    return
+  end
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+  table.insert(lines, "# nagare worktrees")
+  table.insert(lines, "/.worktrees/")
+  vim.fn.writefile(lines, path)
+end
+
 --- Creates a linked worktree on a new branch of the same name, under
 --- <root>/.worktrees like the Go side does for non-Claude agents.
 function M.add_worktree(root, name)
@@ -237,6 +259,7 @@ function M.add_worktree(root, name)
   if vim.v.shell_error ~= 0 then
     return nil, vim.trim(out)
   end
+  M.exclude_worktrees(root)
   util.forget_repos()
   return path
 end

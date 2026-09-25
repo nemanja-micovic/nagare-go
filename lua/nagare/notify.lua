@@ -65,7 +65,10 @@ function M.transition(agent, prev, held, visible)
 
   if status == "waiting_input" then
     if opts.waiting and not visible then
-      local detail = agent.notification_type and agent.notification_type ~= "" and agent.notification_type:gsub("_", " ")
+      -- What it is asking for: the tool call itself when a hook reported it
+      -- ("Bash: rm -rf build"), else the kind of prompt.
+      local detail = agent.last_tool and util.oneline(agent.last_tool, 80)
+        or (agent.notification_type and agent.notification_type ~= "" and agent.notification_type:gsub("_", " "))
         or util.oneline(agent.last_message, 60)
       send(agent, ("**%s** needs you%s\n%s"):format(label, jump_hint(), detail ~= "" and detail or "waiting for input"),
         vim.log.levels.WARN, { timeout = false, icon = "● ", ft = "markdown" })
@@ -80,7 +83,15 @@ function M.transition(agent, prev, held, visible)
 
   if status == "idle" and prev == "running" and opts.finished and held >= opts.min_seconds and not visible then
     local msg = util.oneline(agent.last_message, 120)
-    send(agent, ("**%s** finished after %s%s"):format(label, util.ago(os.time() - held), msg ~= "" and ("\n" .. msg) or ""),
+    local ok, s = pcall(require("nagare.review").summary, agent)
+    local changes = ""
+    if ok and s and s.files > 0 then
+      local keys = config.keys
+      local key = type(keys) == "table" and keys.review
+      changes = ("\n%d file%s +%d −%d%s"):format(s.files, s.files == 1 and "" or "s", s.added, s.removed,
+        key and ("  " .. key:gsub("<leader>", vim.g.mapleader == " " and "␣" or "<leader>") .. " to review") or "")
+    end
+    send(agent, ("**%s** finished after %s%s%s"):format(label, util.ago(os.time() - held), changes, msg ~= "" and ("\n" .. msg) or ""),
       vim.log.levels.INFO, { icon = "✓ ", ft = "markdown" })
   elseif status == "dead" and prev ~= nil and prev ~= "saved" and agent.exit_code and agent.exit_code ~= 0 then
     send(agent, ("**%s** exited with code %d"):format(label, agent.exit_code), vim.log.levels.ERROR, { icon = "✕ ", ft = "markdown" })

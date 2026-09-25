@@ -73,13 +73,17 @@ func main() {
 		},
 	}
 
+	var hookAgent string
 	hookStateCmd := &cobra.Command{
 		Use:   "hook-state",
 		Short: "Handle agent hook events from stdin",
 		Run: func(cmd *cobra.Command, args []string) {
-			hooks.Handle()
+			hooks.Handle(hookAgent)
 		},
 	}
+	hookStateCmd.Flags().StringVar(&hookAgent, "agent", "", "agent sending the event (claude, codex); enables output it understands")
+
+	memoryCmd := newMemoryCmd()
 
 	setupCmd := &cobra.Command{
 		Use:   "setup",
@@ -222,7 +226,7 @@ An optional name selects a separate runtime.`,
 		},
 	}
 
-	rootCmd.AddCommand(lsCmd, nvimCmd, pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
+	rootCmd.AddCommand(memoryCmd, lsCmd, nvimCmd, pickCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
