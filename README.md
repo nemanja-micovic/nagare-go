@@ -20,7 +20,7 @@ Run Claude Code, Codex, OpenCode, Gemini CLI, Crush, pi and OhMyPi side by side,
 - **Worktrees built in.** `F3` starts a new agent in a fresh git worktree of the same repo, grouped under it, with the worktree kept out of your main checkout's `git status`.
 - **Agents that talk to each other.** A built-in MCP server lets your agents discover, message and wait on one another.
 - **Built on tmux, not instead of it.** Your agents run in ordinary tmux sessions: they survive nagare closing, you can attach to them from anywhere, and the sessions you already have show up immediately. nagare itself does not need to run inside tmux.
-- **Fast and small.** One Go binary, 3ms startup, a 30fps live terminal that costs under a millisecond a frame. 13 themes.
+- **Fast and small.** One Go binary, 3ms startup, event-driven redraws (~9ms from keystroke to echo), under a millisecond a frame even with four live agents. 13 themes.
 
 ## Quick start
 
@@ -159,9 +159,10 @@ min_working_seconds = 30
 ## How it works
 
 tmux runs the agents; nagare is the screen you work on them from. For each agent on
-screen, nagare fits its tmux window to the tile it is drawn in, captures the rendered
-pane (at 30fps while it changes, backing off when it does not), and forwards your
-keystrokes back with `send-keys` — so every agent works unmodified, and closing
+screen, nagare fits its tmux window to the tile it is drawn in, and a tmux
+control-mode client tells it the moment the pane prints — so it captures exactly
+when something changed (a keystroke's echo is on screen in ~9ms, and an idle agent
+costs nothing) — then forwards your keystrokes back with `send-keys` — so every agent works unmodified, and closing
 nagare leaves every window exactly as it found it. Agent state comes from hooks and
 plugins that each agent calls on every event. See [CLAUDE.md](CLAUDE.md) for the
 design notes.

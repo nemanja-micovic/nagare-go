@@ -121,14 +121,17 @@ type Model struct {
 	pendingFocusBy time.Time                       // when to stop waiting for pendingFocus
 	leaveKey       string                          // returns from focus mode (picker.focus_leave_key)
 	newQueue       func() *tmux.Queue              // where focus mode's tmux commands go; faked in tests
-	filterGen      int                             // bumped whenever filtered is rebuilt
-	review         reviewState                     // the changes panel (review.go)
-	palette        paletteState                    // the command palette (palette.go)
-	restore        *savedLayout                    // the layout to reopen after the first scan (layout.go)
-	restoreEnabled bool                            // picker.restore_layout
-	toasts         []toast                         // notices about agents not on the keyboard (toast.go)
-	compactRows    bool                            // rows rendered for the narrow focus-mode sidebar
-	sidebarCache   *sidebarCache                   // focus mode's last sidebar render
+	newWatcher     func() outputWatcher            // where output events come from; nil in tests
+	watcher        outputWatcher
+	watchLoop      bool          // the output-event loop is running
+	filterGen      int           // bumped whenever filtered is rebuilt
+	review         reviewState   // the changes panel (review.go)
+	palette        paletteState  // the command palette (palette.go)
+	restore        *savedLayout  // the layout to reopen after the first scan (layout.go)
+	restoreEnabled bool          // picker.restore_layout
+	toasts         []toast       // notices about agents not on the keyboard (toast.go)
+	compactRows    bool          // rows rendered for the narrow focus-mode sidebar
+	sidebarCache   *sidebarCache // focus mode's last sidebar render
 }
 
 // New creates a new picker model with default settings.
@@ -164,6 +167,7 @@ func New() Model {
 		spinner:        newSpinner(),
 		sidebarCache:   &sidebarCache{},
 		newQueue:       tmux.NewQueue,
+		newWatcher:     defaultWatcher,
 		leaveKey:       cmp.Or(cfg.Picker.FocusLeaveKey, keyFocusLeave),
 		restoreEnabled: cfg.Picker.RestoreLayout,
 		restore:        loadLayoutIf(cfg.Picker.RestoreLayout),
@@ -363,6 +367,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case focusTickMsg, focusSnapMsg, attachDoneMsg:
 		return m.updateFocus(msg)
+
+	case paneOutputMsg:
+		return m.onPaneOutput(msg)
 
 	case reviewFilesMsg, reviewDiffMsg, reviewEditDoneMsg:
 		return m.updateReview(msg)

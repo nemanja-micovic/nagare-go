@@ -16,5 +16,6 @@ func NewForTest() Model {
 	m.newQueue = func() *tmux.Queue {
 		return tmux.NewQueueWith(func(...string) (string, error) { return "", nil })
 	}
+	m.newWatcher = func() outputWatcher { return nil }
 	return m
 }

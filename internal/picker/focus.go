@@ -317,7 +317,7 @@ func (m Model) showInTileAt(i int, s models.Session, target string, shell bool) 
 	m.selectKey(m.focus.cur().key)
 	log.Info("focus %s (%s) in tile %d", s.Name, target, i)
 	m.fitFocus(true)
-	return m, m.focusPoll(0)
+	return m, tea.Batch(m.syncWatch(), m.focusPoll(0))
 }
 
 // addTile splits the screen to show another agent beside the ones already on
@@ -384,7 +384,7 @@ func (m Model) closeTileAt(i int) (Model, tea.Cmd) {
 	}
 	m.selectKey(f.cur().key)
 	m.fitFocus(true)
-	return m, m.focusPoll(0)
+	return m, tea.Batch(m.syncWatch(), m.focusPoll(0))
 }
 
 // cycleTile moves the keyboard to the next (or previous) tile.
@@ -477,6 +477,7 @@ func (m *Model) releaseFocus() {
 	f.n = 0
 	f.active = 0
 	f.seq++
+	m.syncWatch() // watch nothing
 }
 
 // Close releases anything focus mode holds, and waits until tmux has it back.
@@ -484,6 +485,9 @@ func (m *Model) releaseFocus() {
 // nagare's size.
 func (m Model) Close() {
 	m.saveLayout() // a no-op unless nagare is closing in focus mode
+	if m.watcher != nil {
+		m.watcher.Close()
+	}
 	if m.focus.q == nil {
 		return
 	}
@@ -630,13 +634,18 @@ func (m Model) updateFocus(msg tea.Msg) (Model, tea.Cmd) {
 		if msg.seq != f.seq {
 			return m, tea.Batch(cmds...) // a newer loop owns the schedule
 		}
-		if changed {
+		switch {
+		case m.eventsLive():
+			// Output events trigger captures; polling is only a safety net.
+			f.delay = focusFallbackPoll
+		case changed:
 			f.delay = focusFastPoll
-		} else {
+		default:
 			f.delay = min(f.delay*2, focusSlowPoll)
 		}
-		// With background tiles open, never sleep past their cadence.
-		if f.n > 1 {
+		// With background tiles open, never sleep past their cadence — unless
+		// output events are driving their captures too.
+		if f.n > 1 && !m.eventsLive() {
 			f.delay = min(f.delay, focusBackgroundPoll)
 		}
 		return m, tea.Batch(append(cmds, m.focusPoll(f.delay))...)

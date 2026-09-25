@@ -325,12 +325,21 @@ func BenchmarkViewFocusSplit4(b *testing.B) {
 }
 
 // runsPoll executes a command tree and reports whether it schedules the poll
-// loop with the model's current sequence number.
+// loop with the given sequence number. Each command runs with a timeout: the
+// output-event loop blocks on its channel by design.
 func runsPoll(cmd tea.Cmd, seq int) bool {
 	if cmd == nil {
 		return false
 	}
-	switch msg := cmd().(type) {
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	var msg tea.Msg
+	select {
+	case msg = <-done:
+	case <-time.After(500 * time.Millisecond):
+		return false
+	}
+	switch msg := msg.(type) {
 	case tea.BatchMsg:
 		for _, c := range msg {
 			if runsPoll(c, seq) {

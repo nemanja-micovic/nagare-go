@@ -239,9 +239,17 @@ How it works, and why each piece is the way it is:
   extended keys). Shift+Enter becomes `M-Enter`, the newline binding that
   survives any terminal. Pastes go through a buffer with `paste-buffer -p`, so a
   multi-line paste lands as one bracketed paste.
-- **Polling adapts.** ~30fps while the screen changes, backing off to 4fps when it
-  does not, and snapping to 12ms after a keystroke. Echo latency measured at
-  30–47ms through two tmux layers.
+- **Captures are event-driven** (`watch.go`, `tmux.Watcher`). A tmux control-mode
+  client (`tmux -C attach -f ignore-size`) per session with a tiled pane reports
+  `%output %<pane>` the moment a pane prints; that triggers a capture — the active
+  tile at most every 33ms, background tiles at their 300ms cadence. The capture is
+  unchanged (tmux renders, nagare needs no terminal emulator); only *when* changed.
+  Echo latency went from a 33ms median (polling) to **9ms**. `ignore-size` keeps
+  the client out of window sizing; it only listens and exits when its stdin
+  closes, so it cannot outlive nagare. While events are healthy, polling is a 1s
+  safety net (a resize reflow prints nothing); without control mode the old
+  adaptive polling runs unchanged — ~30fps while the screen changes, 4fps when
+  still, 12ms after a keystroke.
 - **Nagare keeps few keys.** Only chords an agent has no use for: the leave key
   (`Ctrl+]`, configurable as `picker.focus_leave_key` because it is awkward on
   many non-US layouts), `Alt+↑/↓`, `Alt+s`, `Alt+z`, `Shift+PgUp/PgDn`, F1, F4, F5.
