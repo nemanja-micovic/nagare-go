@@ -178,7 +178,8 @@ changes.
 
 Focus mode keys: everything goes to the agent except `Ctrl+]` (back to the list;
 `picker.focus_leave_key`), `Alt+↑/↓` (switch the tile's agent), `Alt+v` (split),
-`Alt+←/→` (move between tiles), `Alt+x` (close tile), `F4` (next waiting), `Alt+s`
+`Alt+←/→` (move between tiles), `Alt+x` (close tile), `Alt+b` (broadcast a prompt
+to every agent tile — as one bracketed paste plus Enter each, never to shells), `F4` (next waiting), `Alt+s`
 (companion shell), `Alt+d` (review), `Alt+k` (palette), `Shift+PgUp/PgDn`
 (scrollback), `Alt+z` (zoom), `F1`, `F5` (open in tmux; outside tmux the attach
 returns to nagare on detach). A single

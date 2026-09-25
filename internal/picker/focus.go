@@ -729,6 +729,7 @@ const (
 	keyFocusTileRight = "alt+right"
 	keyFocusZoom      = "alt+z"
 	keyFocusShell     = "alt+s"
+	keyFocusBroadcast = "alt+b"
 	keyFocusBack      = "shift+pgup"
 	keyFocusFwd       = "shift+pgdown"
 	keyJumpTmux       = "f5"
@@ -782,6 +783,15 @@ func (m Model) handleFocusKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cycleTile(1)
 	case keyFocusShell:
 		return m.toggleShell()
+	case keyFocusBroadcast:
+		if len(m.broadcastPanes()) == 0 {
+			m.statusNote = "no agent on screen to send to"
+			return m, nil
+		}
+		m.promptMode, m.promptBroadcast = true, true
+		m.promptInput.SetValue("")
+		m.promptInput.Focus()
+		return m, nil
 	case keyFocusPalette:
 		return m.openPalette()
 	case keyFocusReview:
@@ -923,4 +933,30 @@ func keyLabel(key string, short bool) string {
 	}
 	mods = strings.NewReplacer("ctrl+", "Ctrl+", "alt+", "Alt+", "shift+", "Shift+").Replace(mods)
 	return mods + base
+}
+
+// broadcastPanes are the panes a broadcast goes to: every tile showing an
+// agent. Shells are left out — a prompt typed into a shell runs as a command.
+func (m Model) broadcastPanes() []string {
+	var panes []string
+	for i := range m.focus.n {
+		if t := m.focus.tiles[i]; !t.shell && t.pane != "" {
+			panes = append(panes, t.pane)
+		}
+	}
+	return panes
+}
+
+// broadcast sends one prompt to every agent on screen: as a bracketed paste, so
+// a multi-line prompt arrives as one message rather than one per line, then
+// Enter to submit it.
+func (m Model) broadcast(text string) (Model, tea.Cmd) {
+	panes := m.broadcastPanes()
+	for _, p := range panes {
+		m.focus.q.Paste(p, text)
+		m.focus.q.Keys(p, "Enter")
+	}
+	log.Info("broadcast to %d agents", len(panes))
+	m.statusNote = fmt.Sprintf("sent to %d agents", len(panes))
+	return m, m.focusPoll(focusKeyPoll)
 }

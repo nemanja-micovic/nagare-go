@@ -62,6 +62,7 @@ func (m Model) paletteActions() []paletteItem {
 		if m.focus.n > 1 {
 			items = append(items[:3], append([]paletteItem{
 				{label: "Close this tile", keys: "Alt+x", press: keyPress('x', tea.ModAlt)},
+				{label: "Send a prompt to every agent on screen", keys: "Alt+b", press: keyPress('b', tea.ModAlt)},
 				{label: "Next tile", keys: "Alt+→", press: keyPress(tea.KeyRight, tea.ModAlt)},
 			}, items[3:]...)...)
 		}

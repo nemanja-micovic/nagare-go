@@ -121,6 +121,9 @@ func focusHints(m Model) []hint {
 	if m.focus.n < maxTiles {
 		hints = append(hints, hint{"Alt+v", "Split"})
 	}
+	if m.focus.n > 1 {
+		hints = append(hints, hint{"Alt+b", "Send to all"})
+	}
 	hints = append(hints, hint{"Alt ↑/↓", "Switch"}, hint{"Alt+d", "Review"})
 	if m.focus.cur().shell {
 		hints = append(hints, hint{"Alt+s", "Agent"})
@@ -237,6 +240,7 @@ func helpColumns(leave string) ([]helpSection, []helpSection) {
 			{"Alt+v", "Split: add the next agent"},
 			{"Alt+←/→", "Move between tiles"},
 			{"Alt+x", "Close the active tile"},
+			{"Alt+b", "Send a prompt to every agent tile"},
 			{"Alt+s", "Shell in the agent's directory"},
 			{"Alt+d", "Review the agent's changes"},
 			{"F4", "Next agent waiting on you"},

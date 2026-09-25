@@ -12,6 +12,7 @@ Run Claude Code, Codex, OpenCode, Gemini CLI, Crush, pi and OhMyPi side by side,
 
 - **Work inside it.** Press Enter on any agent and its live terminal opens right there, next to a sidebar of everything else that is running. Type to it, answer its permission prompts, interrupt it with Esc.
 - **Watch several at once.** `Alt+v` splits the screen into up to four live agents. The one with the keyboard wears a gradient frame; the rest keep streaming and shout **needs you** the moment they block.
+- **Ask them all at once.** `Alt+b` sends one prompt to every agent on screen — the same question to three agents, or "run the tests" to all of them.
 - **Know who is waiting.** Agents report their state through hooks and plugins, not screen scraping, so nagare knows exactly who is working, idle or waiting for you. `F4` walks the queue of waiting agents.
 - **Review before you trust.** `Alt+d` shows what an agent changed: every touched file with line counts, and git's own diff. Enter opens the file in your editor.
 - **Hear about the ones you are not watching.** When an agent off the keyboard starts waiting or finishes, a toast says so in the corner of your screen.
@@ -58,6 +59,7 @@ deleted when you quit. `--speed 2` runs them twice as fast.
 | Alt+v | | split: add the next agent as a live tile |
 | Alt+← / Alt+→ | | move between tiles |
 | Alt+x | | close the tile |
+| Alt+b | | send one prompt to every agent on screen |
 | Alt+↑ / Alt+↓ | | previous / next agent in this tile |
 | Ctrl+d / Alt+d | review the agent's changes | same |
 | Alt+s | | shell in the agent's directory (again: back) |

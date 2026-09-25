@@ -402,3 +402,36 @@ func TestSessionKeySurvivesRenumbering(t *testing.T) {
 		t.Error("the key changed when the window was renumbered")
 	}
 }
+
+// TestBroadcast — Alt+b sends one prompt to every agent tile, as one paste plus
+// Enter each, and never to a shell.
+func TestBroadcast(t *testing.T) {
+	m, rec := splitModel(t, 240, 60, 5, 3)
+	m.focus.tiles[1].shell = true
+	m = driveModel(t, m, tea.KeyPressMsg{Code: 'b', Mod: tea.ModAlt})
+	if !m.promptMode || !m.promptBroadcast {
+		t.Fatal("Alt+b did not open the broadcast prompt")
+	}
+	if !strings.Contains(ansi.Strip(m.renderPromptOverlay()), "all 2 agents") {
+		t.Error("the dialog does not say how many agents it will reach")
+	}
+	m = typeString(t, m, "run the tests")
+	m = driveModel(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	pastes, enters := map[string]bool{}, map[string]bool{}
+	for _, c := range rec.all(m.focus.q) {
+		switch {
+		case c[0] == "set-buffer" && c[4] == "run the tests":
+			pastes[c[len(c)-1]] = true
+		case c[0] == "send-keys" && c[len(c)-1] == "Enter":
+			enters[c[2]] = true
+		}
+	}
+	for i := range m.focus.n {
+		p := m.focus.tiles[i].pane
+		want := !m.focus.tiles[i].shell
+		if pastes[p] != want || enters[p] != want {
+			t.Errorf("tile %d (shell=%v): pasted=%v entered=%v", i, !want, pastes[p], enters[p])
+		}
+	}
+}
