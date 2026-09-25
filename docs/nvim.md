@@ -51,8 +51,8 @@ stop at the clipboard, because none of them knows which agent owns the diff. nag
 | **Land** | `m` runs the checks in a terminal and merges only if they pass. `F` sends the failures back to the agent. `P` pushes and opens a PR. `X` discards the worktree and branch. |
 | **Memory** | What agents learn is saved for the next session and for sibling agents on the repo. See below. |
 
-| **Autonomy** | `:Nagare policy auto` (or `ask`/`turbo`) writes `.nagare/policy`, which answers Claude's permission requests through the PreToolUse hook. `auto` approves reads and edits *inside the project*; `turbo` approves everything; deny rules (`Bash(rm -rf *)`) never block silently, they force a human decision. The board shows the mode and ⚡N calls approved per agent. |
-| **Cost** | Each agent's transcript (its path comes with every hook) gives tokens, context fill and API-equivalent cost: `$0.42 38%` on its row, a total in the board header, and a warning at 85% context. Prices come from Anthropic's price sheet, including model-specific cache-read rates. |
+| **Autonomy** | `:Nagare policy auto` (or `ask`/`turbo`) writes `.nagare/policy`, which answers permission requests: Claude's through PreToolUse, Codex's through PermissionRequest (the hook Codex fires when it would prompt; it takes only allow/deny, so "a human decides" means printing nothing). For Codex `apply_patch`, auto approves only when every patched path is inside the project. Gemini's hooks can block a tool but not approve one, so a policy cannot save Gemini prompts and is not applied there. `auto` approves reads and edits *inside the project*; `turbo` approves everything; deny rules (`Bash(rm -rf *)`) never block silently, they force a human decision. The board shows the mode and ⚡N calls approved per agent. |
+| **Cost** | Each agent's transcript (its path comes with every hook; Claude's JSONL and Codex's rollout are both read) gives tokens, context fill and API-equivalent cost. Codex shows context fill only, since nagare has no authoritative OpenAI price sheet and won't guess one: `$0.42 38%` on its row, a total in the board header, and a warning at 85% context. Prices come from Anthropic's price sheet, including model-specific cache-read rates. |
 | **CI** | After `P` opens a PR, nagare polls `gh pr checks` for that agent (only while an open PR exists). It shows CI ✓/✗/…, raises a toast when checks fail, and `F` on the board sends the failing job's log to the agent. |
 
 **Trust.** `.nagare/verify` runs a command and `.nagare/policy` approves tool calls, and
@@ -103,7 +103,11 @@ memory tool.
 - **In Neovim:** `<leader>jm` opens a picker with a file preview. Enter opens the note as a
   normal buffer, `<C-x>` archives it, `<C-e>` writes a new one. A toast shows each memory
   an agent saves ("🧠 claude@api remembered (gotcha): …"), so a bad one gets caught early.
-- **CLI:** `nagare-go memory ls | search | add | context | path [--json]`.
+- **Stale memories are flagged.** When `recall` returns a memory about files that were
+  deleted or changed by 50+ lines since the commit it was written at, the result says
+  "possibly stale, verify, then update_memory". The picker shows the same warning. The
+  check runs only on results.
+- **CLI:** `nagare-go memory ls | search | add | context | path | pending | approve | reject [--json]`.
 
 Deferred until there's a need:
 - embeddings through `modernc.org/sqlite/vec`;
@@ -227,6 +231,16 @@ started. Jumping to one resumes it:
 So reopening your editor doesn't launch ten agent CLIs at once. On the board, `c` resumes
 an agent that has exited and `x` forgets one.
 
+## Sessions: persistence.nvim, resession, mksession
+
+`:mksession` silently drops terminal windows, so LazyVim's "Restore Session" used to bring
+back your project tabs with every agent split missing. nagare keeps the layout in
+`g:NagareLayout`, a String global that sessions save when `sessionoptions` has `globals`
+(LazyVim's does). On `SessionLoadPost` it rebuilds each split in its project's tab. A live
+agent gets its terminal back; a saved one gets a placeholder ("◌ … Enter resume here"), so
+restoring a session starts nothing until you ask. resession users add
+`extensions = { nagare = {} }`, which uses the same snapshot and restore.
+
 ## Persistence: `nagare-go nvim`
 
 `nagare-go nvim [name]` attaches to a headless Neovim on
@@ -282,7 +296,7 @@ for the list) and merges those agents into the same projects, tagged `tmux`.
 
 ## Verified
 
-- **94 headless specs** (`tests/nvim/`), including end to end through the real
+- **98 headless specs** (`tests/nvim/`), including end to end through the real
   `nagare-go hook-state` and `nagare-go memory`. They pass on Neovim 0.11.4.
   - Direct binary downloads are blocked in the build sandbox, so 0.11.4 was built from
     source, with its dependencies fetched by `git`.
@@ -310,12 +324,13 @@ for the list) and merges those agents into the same projects, tagged `tmux`.
 - **Mode friction.** This is Neovim's tax. It is reduced by `<C-q>`, by returning to the
   mode you left, and by `insert_on_jump`.
 
-## Next, from the research (not built yet)
+## Next (not built yet)
 
-1. **Codex usage**: read Codex's session logs as well as Claude's.
-2. **Policy for Codex and Gemini**, once their hooks' permission decisions are verified.
-3. **A resession extension** that restores tab and window placement along with agents.
-4. **Memory staleness**: mark memories whose files changed a lot since they were written.
+1. **Codex pricing**, once there is an authoritative source to read it from.
+2. **A consolidation "gardener"**: an agent run that merges duplicate memories and rewrites
+   vague ones, using the same memory tools.
+3. **Screenshot tests** (mini.test, child Neovim) for the board, review tab and peek.
+4. **CI for the plugin specs** on Neovim 0.10, 0.11 and nightly.
 3. **Jump-mode letters** over waiting agents, tabby/barbar style.
 4. **Mailbox and MCP messaging** surfaced on the board.
 5. **Opt-in claudecode.nvim interop**, passing `CLAUDE_CODE_SSE_PORT` so diffs open in

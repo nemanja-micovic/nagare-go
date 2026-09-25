@@ -60,3 +60,26 @@ func TestUnknownModelFlagged(t *testing.T) {
 		t.Errorf("unknown model: %+v", u)
 	}
 }
+
+const codexRollout = `{"timestamp":"t","type":"session_meta","payload":{"id":"x","cwd":"/r"}}
+{"timestamp":"t","type":"turn_context","payload":{"cwd":"/r","model":"gpt-5-codex"}}
+{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":null}}
+{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5000,"cached_input_tokens":3000,"output_tokens":400,"reasoning_output_tokens":100,"total_tokens":5500},"last_token_usage":{"input_tokens":5000,"cached_input_tokens":3000,"output_tokens":400,"reasoning_output_tokens":100,"total_tokens":5500},"model_context_window":272000}}}
+{"timestamp":"t","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":61000,"cached_input_tokens":50000,"output_tokens":900,"reasoning_output_tokens":300,"total_tokens":62200},"last_token_usage":{"input_tokens":56000,"cached_input_tokens":47000,"output_tokens":500,"reasoning_output_tokens":200,"total_tokens":136000},"model_context_window":272000}}}
+`
+
+func TestParseCodexRollout(t *testing.T) {
+	u := Parse(strings.NewReader(codexRollout))
+	if u.Model != "gpt-5-codex" || u.Turns != 2 {
+		t.Fatalf("model/turns = %q/%d", u.Model, u.Turns)
+	}
+	if u.Input != 61000 || u.CacheRead != 50000 || u.Output != 1200 {
+		t.Errorf("totals = %+v", u)
+	}
+	if u.Context != 136000 || u.Window != 272000 || u.ContextPct != 50 {
+		t.Errorf("context = %d/%d (%d%%)", u.Context, u.Window, u.ContextPct)
+	}
+	if u.KnownPricing || u.Cost != 0 {
+		t.Error("Codex cost must stay unknown, not guessed")
+	}
+}

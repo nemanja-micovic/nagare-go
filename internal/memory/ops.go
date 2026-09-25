@@ -3,7 +3,11 @@ package memory
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -374,4 +378,42 @@ func (s *Store) Decide(cwd, id string, approve bool) (Memory, error) {
 		status = "active"
 	}
 	return s.Update(cwd, UpdateInput{ID: id, Status: status})
+}
+
+// staleLines is how many changed lines in a memory's files since it was
+// written make it worth re-checking.
+const staleLines = 50
+
+// Staleness says why a memory may no longer hold — a file it is about was
+// deleted, or has changed a lot since the commit it was written at — or ""
+// when nothing suggests so. Run only on search results, never the store.
+func Staleness(root string, m Memory) string {
+	if len(m.Paths) == 0 || m.Commit == "" {
+		return ""
+	}
+	var missing []string
+	changed := 0
+	for _, p := range m.Paths {
+		if _, err := os.Stat(filepath.Join(root, p)); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	out, err := exec.Command("git", append([]string{"-C", root, "diff", "--numstat", m.Commit, "HEAD", "--"}, m.Paths...)...).Output()
+	if err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			f := strings.Fields(line)
+			if len(f) >= 2 {
+				a, _ := strconv.Atoi(f[0])
+				d, _ := strconv.Atoi(f[1])
+				changed += a + d
+			}
+		}
+	}
+	switch {
+	case len(missing) > 0:
+		return "possibly stale: " + strings.Join(missing, ", ") + " no longer exists"
+	case changed >= staleLines:
+		return fmt.Sprintf("possibly stale: %d lines changed in its files since %s", changed, m.Commit)
+	}
+	return ""
 }

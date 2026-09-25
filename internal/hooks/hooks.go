@@ -100,6 +100,71 @@ func ApplyPolicy(ev HookEvent, st models.SessionState, p *policy.Policy) (models
 	return st, string(out)
 }
 
+// patchPaths lists the files a Codex apply_patch touches, from its
+// "*** Add File: x" / "*** Update File: x" / "*** Delete File: x" /
+// "*** Move to: x" headers.
+func patchPaths(patch string) []string {
+	var out []string
+	for _, line := range strings.Split(patch, "\n") {
+		for _, h := range []string{"*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "} {
+			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), h); ok && strings.TrimSpace(rest) != "" {
+				out = append(out, strings.TrimSpace(rest))
+			}
+		}
+	}
+	return out
+}
+
+// codexCall maps a Codex PermissionRequest onto a policy call. Codex names
+// its shell tool "Bash", as Claude does, so rules carry over; apply_patch
+// becomes an Edit of every file the patch touches.
+func codexCall(ev HookEvent) policy.Call {
+	if ev.ToolName == "apply_patch" {
+		var in struct {
+			Command string `json:"command"`
+			Patch   string `json:"patch"`
+			Input   string `json:"input"`
+		}
+		_ = json.Unmarshal(ev.ToolInput, &in)
+		text := in.Command + in.Patch + in.Input
+		if text == "" {
+			text = string(ev.ToolInput)
+		}
+		paths := patchPaths(text)
+		detail := ""
+		if len(paths) > 0 {
+			detail = paths[0]
+		}
+		return policy.Call{Tool: "Edit", Detail: detail, Cwd: ev.Cwd, Paths: paths}
+	}
+	return policy.Call{Tool: ev.ToolName, Detail: ToolDetail(ev.ToolInput), Cwd: ev.Cwd}
+}
+
+// ApplyCodexPolicy answers a Codex PermissionRequest — the hook Codex fires
+// when it would otherwise prompt. Codex accepts only allow or deny there,
+// so "a human decides" is printing nothing and letting the prompt appear.
+func ApplyCodexPolicy(ev HookEvent, st models.SessionState, p *policy.Policy) (models.SessionState, string) {
+	if p == nil || ev.HookEventName != "PermissionRequest" || ev.ToolName == "" {
+		return st, ""
+	}
+	c := codexCall(ev)
+	if c.Tool == "Edit" && len(c.Paths) == 0 {
+		return st, "" // a patch we cannot read is a patch a human reads
+	}
+	d := p.Decide(c)
+	if d.Verdict != "allow" {
+		return st, ""
+	}
+	st.AutoApproved++
+	out, _ := json.Marshal(map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName": "PermissionRequest",
+			"decision":      map[string]string{"behavior": "allow"},
+		},
+	})
+	return st, string(out)
+}
+
 // projectPolicy loads the approved policy for cwd, or nil.
 func projectPolicy(cwd string) *policy.Policy {
 	file := verify.FindFile(cwd, policy.FileName)
@@ -329,6 +394,13 @@ func Handle(agent string) {
 	if agent == "claude" && event.HookEventName == "PreToolUse" {
 		var out string
 		newSessionState, out = ApplyPolicy(event, newSessionState, projectPolicy(event.Cwd))
+		if out != "" {
+			stdout = out
+		}
+	}
+	if agent == "codex" && event.HookEventName == "PermissionRequest" {
+		var out string
+		newSessionState, out = ApplyCodexPolicy(event, newSessionState, projectPolicy(event.Cwd))
 		if out != "" {
 			stdout = out
 		}

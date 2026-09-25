@@ -26,16 +26,16 @@ func TestDecide(t *testing.T) {
 		call Call
 		want string
 	}{
-		{"allowed command", Call{"Bash", "go test ./...", cwd}, "allow"},
-		{"other command asks as usual", Call{"Bash", "make deploy", cwd}, ""},
-		{"deny wins over mode", Call{"Bash", "rm -rf build", cwd}, "ask"},
-		{"deny wins over allow", Call{"Bash", "git push --force", cwd}, "ask"},
-		{"read is auto", Call{"Read", "/etc/hosts", cwd}, "allow"},
-		{"edit inside the project", Call{"Edit", cwd + "/main.go", cwd}, "allow"},
-		{"relative edit is inside", Call{"Write", "docs/x.md", cwd}, "allow"},
-		{"edit outside the project asks", Call{"Edit", "/src/app/main.go", cwd}, ""},
-		{"edit escaping with ..", Call{"Write", "../../secrets", cwd}, ""},
-		{"unknown tool asks", Call{"WebFetch", "https://x", cwd}, ""},
+		{"allowed command", Call{Tool: "Bash", Detail: "go test ./...", Cwd: cwd}, "allow"},
+		{"other command asks as usual", Call{Tool: "Bash", Detail: "make deploy", Cwd: cwd}, ""},
+		{"deny wins over mode", Call{Tool: "Bash", Detail: "rm -rf build", Cwd: cwd}, "ask"},
+		{"deny wins over allow", Call{Tool: "Bash", Detail: "git push --force", Cwd: cwd}, "ask"},
+		{"read is auto", Call{Tool: "Read", Detail: "/etc/hosts", Cwd: cwd}, "allow"},
+		{"edit inside the project", Call{Tool: "Edit", Detail: cwd + "/main.go", Cwd: cwd}, "allow"},
+		{"relative edit is inside", Call{Tool: "Write", Detail: "docs/x.md", Cwd: cwd}, "allow"},
+		{"edit outside the project asks", Call{Tool: "Edit", Detail: "/src/app/main.go", Cwd: cwd}, ""},
+		{"edit escaping with ..", Call{Tool: "Write", Detail: "../../secrets", Cwd: cwd}, ""},
+		{"unknown tool asks", Call{Tool: "WebFetch", Detail: "https://x", Cwd: cwd}, ""},
 	}
 	for _, c := range cases {
 		if got := p.Decide(c.call).Verdict; got != c.want {
@@ -43,14 +43,14 @@ func TestDecide(t *testing.T) {
 		}
 	}
 	turbo := Parse("mode: turbo\ndeny: Bash(rm -rf *)")
-	if turbo.Decide(Call{"WebFetch", "https://x", cwd}).Verdict != "allow" {
+	if turbo.Decide(Call{Tool: "WebFetch", Detail: "https://x", Cwd: cwd}).Verdict != "allow" {
 		t.Error("turbo should allow")
 	}
-	if turbo.Decide(Call{"Bash", "rm -rf /", cwd}).Verdict != "ask" {
+	if turbo.Decide(Call{Tool: "Bash", Detail: "rm -rf /", Cwd: cwd}).Verdict != "ask" {
 		t.Error("turbo deny should ask")
 	}
 	ask := Parse("mode: ask")
-	if ask.Decide(Call{"Read", "x", cwd}).Verdict != "" {
+	if ask.Decide(Call{Tool: "Read", Detail: "x", Cwd: cwd}).Verdict != "" {
 		t.Error("ask mode approves nothing by itself")
 	}
 }

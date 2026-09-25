@@ -244,3 +244,38 @@ func TestProposeIsPendingUntilApproved(t *testing.T) {
 		t.Error("no lesson, no proposal")
 	}
 }
+
+func TestStalenessFollowsTheFiles(t *testing.T) {
+	root := repo(t)
+	git := func(args ...string) {
+		if out, err := exec.Command("git", append([]string{"-C", root, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	os.WriteFile(filepath.Join(root, "grid.go"), []byte("package x\n"), 0o644)
+	os.WriteFile(filepath.Join(root, "old.go"), []byte("package x\n"), 0o644)
+	git("add", ".")
+	git("commit", "-q", "-m", "files")
+	s := store(t)
+	m, err := s.Remember(root, RememberInput{Text: "fitBox clips the border in grid cards", Paths: []string{"grid.go"}}, Who{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why := Staleness(root, m); why != "" {
+		t.Errorf("fresh memory flagged: %s", why)
+	}
+	os.WriteFile(filepath.Join(root, "grid.go"), []byte("package x\n"+strings.Repeat("var a = 1\n", 60)), 0o644)
+	git("commit", "-q", "-am", "rewrite")
+	if why := Staleness(root, m); !strings.Contains(why, "lines changed") {
+		t.Errorf("heavily changed file not flagged: %q", why)
+	}
+	gone, _ := s.Remember(root, RememberInput{Text: "old.go holds the legacy parser entry point", Paths: []string{"old.go"}}, Who{})
+	git("rm", "-q", "old.go")
+	git("commit", "-q", "-m", "drop")
+	if why := Staleness(root, gone); !strings.Contains(why, "no longer exists") {
+		t.Errorf("deleted file not flagged: %q", why)
+	}
+	if Staleness(root, Memory{Paths: []string{"grid.go"}}) != "" {
+		t.Error("a memory without a commit cannot be judged")
+	}
+}

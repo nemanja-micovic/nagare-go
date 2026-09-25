@@ -167,3 +167,43 @@ func TestApplyPolicyAnswersPreToolUse(t *testing.T) {
 		t.Error("only PreToolUse is answered")
 	}
 }
+
+func TestCodexPolicyUsesPermissionRequest(t *testing.T) {
+	p := policy.Parse("mode: auto\nallow: Bash(cargo test*)\ndeny: Bash(rm -rf *)")
+	ev := HookEvent{HookEventName: "PermissionRequest", SessionID: "c", Cwd: "/r", ToolName: "Bash",
+		ToolInput: json.RawMessage(`{"command":"cargo test --all"}`)}
+	st, out := ApplyCodexPolicy(ev, models.SessionState{}, &p)
+	var got struct {
+		H struct {
+			Event    string            `json:"hookEventName"`
+			Decision map[string]string `json:"decision"`
+		} `json:"hookSpecificOutput"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil || got.H.Event != "PermissionRequest" ||
+		got.H.Decision["behavior"] != "allow" || st.AutoApproved != 1 {
+		t.Fatalf("allowed command: %q", out)
+	}
+	// Codex has no "ask": a denied rule prints nothing so its own prompt shows.
+	ev.ToolInput = json.RawMessage(`{"command":"rm -rf target"}`)
+	if _, out = ApplyCodexPolicy(ev, st, &p); out != "" {
+		t.Errorf("deny rule should leave the prompt to the human: %q", out)
+	}
+	patch := `{"command":"*** Begin Patch\n*** Update File: src/main.rs\n@@\n-a\n+b\n*** Add File: src/new.rs\n+x\n*** End Patch"}`
+	ev.ToolName, ev.ToolInput = "apply_patch", json.RawMessage(patch)
+	if _, out = ApplyCodexPolicy(ev, st, &p); !strings.Contains(out, `"allow"`) {
+		t.Errorf("patch inside the project should be approved in auto: %q", out)
+	}
+	escape := `{"command":"*** Begin Patch\n*** Update File: src/main.rs\n*** Update File: /etc/hosts\n*** End Patch"}`
+	ev.ToolInput = json.RawMessage(escape)
+	if _, out = ApplyCodexPolicy(ev, st, &p); out != "" {
+		t.Errorf("a patch touching a file outside the project must ask: %q", out)
+	}
+	ev.ToolInput = json.RawMessage(`{"weird":true}`)
+	if _, out = ApplyCodexPolicy(ev, st, &p); out != "" {
+		t.Errorf("an unreadable patch must ask: %q", out)
+	}
+	claudeEv := HookEvent{HookEventName: "PreToolUse", ToolName: "Bash", ToolInput: json.RawMessage(`{"command":"cargo test"}`)}
+	if _, out = ApplyCodexPolicy(claudeEv, st, &p); out != "" {
+		t.Error("only PermissionRequest is answered for Codex")
+	}
+}

@@ -29,6 +29,7 @@ type memoryEntry struct {
 	Pinned  bool     `json:"pinned,omitempty"`
 	File    string   `json:"file"`
 	Score   float64  `json:"score,omitempty"`
+	Stale   string   `json:"stale,omitempty"`
 }
 
 func entry(m memory.Memory, score float64) memoryEntry {
@@ -76,12 +77,14 @@ func newMemoryCmd() *cobra.Command {
 		Use:   "ls",
 		Short: "List this repository's memories and the global ones",
 		RunE: func(c *cobra.Command, args []string) error {
-			key, _ := memory.ProjectKey(dir())
+			key, root := memory.ProjectKey(dir())
 			var entries []memoryEntry
 			var lines []string
 			now := time.Now()
 			for _, m := range memory.Open().Load(key, all) {
-				entries = append(entries, entry(m, 0))
+				e := entry(m, 0)
+				e.Stale = memory.Staleness(root, m)
+				entries = append(entries, e)
 				lines = append(lines, memory.Line(m, now))
 			}
 			return print(entries, lines)

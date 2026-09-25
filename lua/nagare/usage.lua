@@ -63,8 +63,12 @@ function M.label(agent)
   if not u or (u.turns or 0) == 0 then
     return ""
   end
-  local cost = u.known_pricing and ("$%.2f"):format(u.cost_usd) or "$?"
-  return ("%s %d%%"):format(cost, u.context_pct or 0)
+  -- An agent we cannot price (Codex) shows context fill alone rather than
+  -- a guessed figure.
+  if not u.known_pricing then
+    return ("%d%%"):format(u.context_pct or 0)
+  end
+  return ("$%.2f %d%%"):format(u.cost_usd, u.context_pct or 0)
 end
 
 --- Total API-equivalent cost of every agent this editor knows about.

@@ -84,7 +84,17 @@ install spec in `docs/nvim.md`. Requires Neovim 0.10+.
   an approval but an agent's edit revokes it. Never add a repo file that acts on the user's
   behalf without the same gate.
 - Policy: deny rules return "ask" (a human decides), never a silent deny; auto approves edits
-  only inside the agent's cwd. Only Claude's PreToolUse is answered (`--agent claude`).
+  only inside the agent's cwd. Claude: PreToolUse (`permissionDecision`). Codex: PermissionRequest
+  only (`decision.behavior` allow/deny; its PreToolUse rejects allow/ask — verified in
+  codex-rs/hooks/src/engine/output_parser.rs); a non-allow prints nothing so Codex prompts.
+  Codex `apply_patch` → Edit of every patched path. Gemini's BeforeTool can only block, so no
+  policy there.
+- Usage: `usage.Parse` auto-detects Claude JSONL vs Codex rollout (`event_msg`/`token_count`,
+  `turn_context` model); Codex cost stays unknown (no price sheet), never guessed.
+- Sessions (`session.lua`): mksession drops terminal windows; layout lives in `g:NagareLayout`
+  (String global, saved with sessionoptions "globals") and is rebuilt on SessionLoadPost with
+  placeholders for saved agents. resession extension: `lua/resession/extensions/nagare.lua`.
+- Memory staleness (`memory.Staleness`) runs git only on recall results / ls entries.
 - Usage prices live in `internal/usage` (per-model cache-read rates differ: Fable 5.1 0.025x,
   Opus 5.5 0.05x, else 0.1x); cost is "API-equivalent". Transcript lines repeat usage per
   content block — dedupe by message id.

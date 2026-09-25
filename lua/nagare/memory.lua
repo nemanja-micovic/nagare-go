@@ -297,6 +297,7 @@ M.source = {
       { "  " .. m.kind, "NagareDim" },
       { m.scope == "global" and "  global" or "", "NagareDim" },
       { m.pinned and "  pinned" or "", "NagareSlot" },
+      { m.stale and ("  ⚠ " .. m.stale) or "", "NagareWaiting" },
       { m.author and ("  " .. m.author) or "", "NagareDim" },
     }
   end,

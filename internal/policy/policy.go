@@ -119,6 +119,9 @@ type Call struct {
 	Tool   string // e.g. "Bash", "Edit", "mcp__nagare__recall"
 	Detail string // what it is about: the command, file path or URL
 	Cwd    string // the agent's directory; auto only approves edits inside it
+	// Paths are every file an edit touches, when it touches several (a
+	// Codex apply_patch); auto approves only if all are inside Cwd.
+	Paths []string
 }
 
 // Decision is what to tell the agent: "allow", "ask", or "" for no
@@ -151,7 +154,7 @@ func (p Policy) Decide(c Call) Decision {
 		if readOnly[c.Tool] {
 			return Decision{"allow", "nagare policy: auto (read)"}
 		}
-		if editing[c.Tool] && inside(c.Detail, c.Cwd) {
+		if editing[c.Tool] && allInside(c) {
 			return Decision{"allow", "nagare policy: auto (edit inside the project)"}
 		}
 	}
@@ -164,6 +167,18 @@ func (r Rule) Matches(c Call) bool {
 		return false
 	}
 	return r.Pattern == "" || glob(r.Pattern, c.Detail)
+}
+
+func allInside(c Call) bool {
+	if len(c.Paths) == 0 {
+		return inside(c.Detail, c.Cwd)
+	}
+	for _, p := range c.Paths {
+		if !inside(p, c.Cwd) {
+			return false
+		}
+	}
+	return true
 }
 
 // inside reports whether path lies within dir (relative paths count as

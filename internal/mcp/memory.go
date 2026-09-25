@@ -61,9 +61,14 @@ func RecallHandler(cwd string, in memory.RecallInput) string {
 		return "No memories match. (Save one with remember once you learn something worth keeping.)"
 	}
 	now := time.Now()
+	_, root := memory.ProjectKey(cwd)
 	lines := make([]string, 0, len(hits))
 	for _, h := range hits {
-		lines = append(lines, memory.Line(h.Memory, now))
+		line := memory.Line(h.Memory, now)
+		if why := memory.Staleness(root, h.Memory); why != "" {
+			line += "  [" + why + " — verify, then update_memory]"
+		}
+		lines = append(lines, line)
 	}
 	return strings.Join(lines, "\n") + "\n\nFetch full text with get_memory(ids=[...])."
 }

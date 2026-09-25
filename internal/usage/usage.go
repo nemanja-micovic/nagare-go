@@ -95,17 +95,94 @@ type turn struct {
 	input, output, read, w5m, w1h int
 }
 
-// Parse reads a Claude Code transcript. Claude Code writes a line per
-// content block and repeats the message's usage on each, so turns are
-// de-duplicated by message id, keeping the last (complete) usage.
+// Parse reads an agent transcript: Claude Code's JSONL, or Codex's rollout
+// JSONL, told apart by their line shapes.
 func Parse(r io.Reader) Usage {
-	turns := map[string]turn{}
-	var order []string
+	var lines [][]byte
+	codex := false
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 	for sc.Scan() {
+		b := append([]byte(nil), sc.Bytes()...)
+		lines = append(lines, b)
+		if !codex {
+			var probe struct {
+				Type    string          `json:"type"`
+				Payload json.RawMessage `json:"payload"`
+			}
+			if json.Unmarshal(b, &probe) == nil && len(probe.Payload) > 0 &&
+				(probe.Type == "session_meta" || probe.Type == "turn_context" || probe.Type == "event_msg") {
+				codex = true
+			}
+		}
+	}
+	if codex {
+		return parseCodex(lines)
+	}
+	return parseClaude(lines)
+}
+
+// codexTokens is Codex's TokenUsage.
+type codexTokens struct {
+	Input     int `json:"input_tokens"`
+	Cached    int `json:"cached_input_tokens"`
+	Output    int `json:"output_tokens"`
+	Reasoning int `json:"reasoning_output_tokens"`
+	Total     int `json:"total_tokens"`
+}
+
+// parseCodex reads a Codex rollout: token_count events carry running totals,
+// the latest request's size (what fills the window) and the window itself;
+// turn_context lines name the model. Codex models are not priced here, so
+// the cost is left unknown rather than guessed.
+func parseCodex(lines [][]byte) Usage {
+	u := Usage{KnownPricing: false}
+	for _, raw := range lines {
+		var l struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Type  string `json:"type"`
+				Model string `json:"model"`
+				Info  *struct {
+					Total  codexTokens `json:"total_token_usage"`
+					Last   codexTokens `json:"last_token_usage"`
+					Window int         `json:"model_context_window"`
+				} `json:"info"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(raw, &l) != nil {
+			continue
+		}
+		switch {
+		case l.Type == "turn_context" && l.Payload.Model != "":
+			u.Model = l.Payload.Model
+		case l.Type == "event_msg" && l.Payload.Type == "token_count" && l.Payload.Info != nil:
+			info := l.Payload.Info
+			u.Turns++
+			u.Input = info.Total.Input
+			u.CacheRead = info.Total.Cached
+			u.Output = info.Total.Output + info.Total.Reasoning
+			u.Context = info.Last.Total
+			if info.Window > 0 {
+				u.Window = info.Window
+			}
+		}
+	}
+	if u.Window > 0 {
+		u.ContextPct = u.Context * 100 / u.Window
+	}
+	return u
+}
+
+// parseClaude reads a Claude Code transcript. Claude Code writes a line per
+// content block and repeats the message's usage on each, so turns are
+// de-duplicated by message id, keeping the last (complete) usage.
+func parseClaude(lines [][]byte) Usage {
+	turns := map[string]turn{}
+	var order []string
+	for _, raw := range lines {
 		var l line
-		if err := json.Unmarshal(sc.Bytes(), &l); err != nil || l.Type != "assistant" || l.Message.Usage == nil {
+		if err := json.Unmarshal(raw, &l); err != nil || l.Type != "assistant" || l.Message.Usage == nil {
 			continue
 		}
 		u := l.Message.Usage

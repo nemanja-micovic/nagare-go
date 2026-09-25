@@ -715,6 +715,7 @@ function M._init()
     end,
   })
   require("nagare.trust").setup_autocmd(group)
+  require("nagare.session").setup(group)
   api.nvim_create_autocmd("VimResized", {
     group = group,
     callback = function()

@@ -99,12 +99,22 @@ board shows ✓ or ✗; merging from a review runs the same checks first.
 ==============================================================================
 POLICY AND TRUST                                    *nagare-policy* *nagare-trust*
 
-.nagare/policy answers Claude's permission requests: `mode: ask|auto|turbo`
+.nagare/policy answers Claude's (PreToolUse) and Codex's (PermissionRequest)
+permission requests: `mode: ask|auto|turbo`
 plus `allow:` and `deny:` rules like Bash(go test *). auto approves reads and
 edits inside the project; turbo approves everything; deny forces a human.
 .nagare/verify and .nagare/policy come with the repository, so they act only
 once you approve their exact contents (:Nagare trust, `nagare-go trust`, or
 saving the file yourself); any change needs approving again.
+
+==============================================================================
+SESSIONS                                                      *nagare-sessions*
+
+:mksession drops terminal windows. nagare records its agent splits in
+g:NagareLayout (saved with 'sessionoptions' "globals", as LazyVim sets it) and
+rebuilds them on SessionLoadPost: live agents come back as themselves, saved
+ones as placeholders that resume on <CR>. resession.nvim: add
+`extensions = { nagare = {} }`.
 
 ==============================================================================
 MEMORY                                                          *nagare-memory*
