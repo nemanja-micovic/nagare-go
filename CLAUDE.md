@@ -218,13 +218,17 @@ How it works, and why each piece is the way it is:
   the agent lays itself out for the space it is shown in. `ReleaseWindow` hands it
   back — `resize-window -A` *then* unset `window-size`; the other order leaves it
   pinned, because `-A` itself sets `manual`. A pane sharing its window is zoomed
-  first. Fitted windows carry `@nagare_focus`, and `ReleaseStaleWindows` runs at
-  startup so a crashed run cannot leave a window pinned at nagare's size.
+  first. Fitted windows carry `@nagare_focus` holding the owner's pid, and
+  `ReleaseStaleWindows` runs at startup, before the first scan, releasing only
+  windows whose owner is dead — so a crashed run cannot leave a window pinned, and
+  a second nagare running alongside keeps its tiles.
 - **Every tmux call goes through one queue** (`tmux.Queue`). Keystrokes must
   arrive in order; a `tea.Cmd` per key would race, and running inline would stall
   the UI per fork. Captures go through the same worker, so a capture always sees
   every key sent before it, and replies are numbered so a late one cannot rewind
-  the screen. Bursts of typed text coalesce into one `send-keys -l`.
+  the screen. The number is taken in the same queue job as the captures, and a
+  stale reply from the current loop still reschedules — otherwise two polls racing
+  to the queue could end polling for good. Bursts of typed text coalesce into one `send-keys -l`.
 - **tmux drops a trailing `;` from any argument** — it reads it as a command
   separator. `tmux.Arg` escapes it; every argument carrying user text or a key
   name must go through it. This lost the `;` from `git status; pwd` typed into the
@@ -279,6 +283,12 @@ prompts.
 Focus mode holds up to `maxTiles` (4) panes as tiles. `Alt+v` adds the next agent
 that is not on screen; each tile's window is fitted to its own rectangle.
 
+- **Sessions are keyed by pane id** (`sessionKey`), falling back to
+  `session:window.pane` only when there is none. The positional key named a
+  different agent after a window renumber, so a tile would review, shell into and
+  jump to the wrong one.
+- **Tiles close at their own index** (`closeTileAt`): an agent exiting in a
+  background tile once moved the keyboard onto another agent mid-sentence.
 - **Tiles are a fixed array**, `[maxTiles]paneView` plus a count, not a slice. The
   Model is copied by value on every update, and a slice's shared backing array let
   one copy's edits leak into another.
@@ -318,11 +328,15 @@ fails if any reaches the agent as a keystroke.
   keyboard, drawn top-right with the compositor, above tiles and below dialogs.
   Five seconds, at most three, pruned on the 10fps clock, which stays alive while
   any are showing. None in the list: the flashing row is already where the eye is.
-- **Layout restore** (`layout.go`, `picker.restore_layout`): `Close` saves the
-  tiles to `layout.json` when quitting in focus mode and deletes it when quitting
-  from the list. The first scan reopens tiles whose agents are still listed,
-  matching by pane id then session key. Tests never touch it: `NewForTest`
-  disables both reading and writing.
+- **Layout restore** (`layout.go`, `picker.restore_layout`): the tiles are saved
+  to `layout.json` whenever focus mode closes — leaving it with the leave key, or
+  quitting in it — and forgotten only when the last tile is closed with Alt+x.
+  Focus mode has no quit key (Esc belongs to the agent), so the first version's
+  "quitting from the list forgets it" forgot it every time. A saved tile matches
+  only the same pane *in the same session running the same agent* (tmux reuses
+  pane ids after a restart), is never opened twice, and the saved active index is
+  mapped to the opened tiles. Tests never touch the file: `NewForTest` disables
+  reading and writing.
 - **First run**: with no sessions the detail panel is a welcome that names
   `Ctrl+n`, `Ctrl+r`, `Ctrl+k`, `nagare-go demo` and `nagare-go setup`, and an empty
   search says what did not match — most people's first look at nagare was a
