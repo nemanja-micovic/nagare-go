@@ -51,6 +51,17 @@ stop at the clipboard, because none of them knows which agent owns the diff. nag
 | **Land** | `m` runs the checks in a terminal and merges only if they pass. `F` sends the failures back to the agent. `P` pushes and opens a PR. `X` discards the worktree and branch. |
 | **Memory** | What agents learn is saved for the next session and for sibling agents on the repo. See below. |
 
+| **Autonomy** | `:Nagare policy auto` (or `ask`/`turbo`) writes `.nagare/policy`, which answers Claude's permission requests through the PreToolUse hook. `auto` approves reads and edits *inside the project*; `turbo` approves everything; deny rules (`Bash(rm -rf *)`) never block silently, they force a human decision. The board shows the mode and ⚡N calls approved per agent. |
+| **Cost** | Each agent's transcript (its path comes with every hook) gives tokens, context fill and API-equivalent cost: `$0.42 38%` on its row, a total in the board header, and a warning at 85% context. Prices come from Anthropic's price sheet, including model-specific cache-read rates. |
+| **CI** | After `P` opens a PR, nagare polls `gh pr checks` for that agent (only while an open PR exists). It shows CI ✓/✗/…, raises a toast when checks fail, and `F` on the board sends the failing job's log to the agent. |
+
+**Trust.** `.nagare/verify` runs a command and `.nagare/policy` approves tool calls, and
+both come with the repository. So neither does anything until you approve its exact
+contents: `nagare-go trust`, `:Nagare trust`, or saving the file in your own editor. Any
+change, whether a `git pull` or an agent editing its worktree copy, needs approving again.
+Approvals are keyed by repository plus path, so every worktree's identical copy shares one.
+An unapproved verify file tells you it didn't run, rather than silently doing nothing.
+
 `:Nagare fanout 3 claude,codex <task>` runs the same task in three worktrees. Review them
 side by side and merge the winner. `:Nagare broadcast <text>` sends one message to every
 agent in the project ("rebase on main", "run the tests").
@@ -83,13 +94,18 @@ memory tool.
   last week by any agent on the repo, and how many more exist. It's labelled as data, not
   instructions, and capped in size. Claude fires SessionStart after `/clear` and compaction
   too, so memory survives both.
+- **Proposed from transcripts, approved by you.** When a turn ends with what reads like a
+  lesson ("the root cause was…", "turns out…"), the hook proposes it as a *pending*
+  memory. Pending memories are invisible to `recall` until approved. The toast says
+  "proposed", and in `<leader>jm` pending memories come first (⏳): `<C-y>` approves,
+  `<C-x>` rejects. Extraction is deliberately conservative: a proposal you have to reject
+  costs attention.
 - **In Neovim:** `<leader>jm` opens a picker with a file preview. Enter opens the note as a
   normal buffer, `<C-x>` archives it, `<C-e>` writes a new one. A toast shows each memory
   an agent saves ("🧠 claude@api remembered (gotcha): …"), so a bad one gets caught early.
 - **CLI:** `nagare-go memory ls | search | add | context | path [--json]`.
 
 Deferred until there's a need:
-- automatic capture from transcripts, with an approval inbox;
 - embeddings through `modernc.org/sqlite/vec`;
 - staleness checks against git;
 - a "gardener" agent that consolidates notes.
@@ -266,7 +282,7 @@ for the list) and merges those agents into the same projects, tagged `tmux`.
 
 ## Verified
 
-- **89 headless specs** (`tests/nvim/`), including end to end through the real
+- **94 headless specs** (`tests/nvim/`), including end to end through the real
   `nagare-go hook-state` and `nagare-go memory`. They pass on Neovim 0.11.4.
   - Direct binary downloads are blocked in the build sandbox, so 0.11.4 was built from
     source, with its dependencies fetched by `git`.
@@ -296,12 +312,10 @@ for the list) and merges those agents into the same projects, tagged `tmux`.
 
 ## Next, from the research (not built yet)
 
-1. **Usage and cost per agent**: tokens, cost and context % from the agent's session log
-   (or ccusage), shown on the board row and in lualine.
-2. **An approval inbox with autonomy presets**: answer PreToolUse from an allow/deny list
-   per project (Antigravity's Off/Auto/Turbo). Only what's left reaches you.
-3. **The CI loop**: after `P`, poll `gh pr checks` for that agent and send failing jobs back.
-4. **A resession extension** that restores tab and window placement along with agents.
+1. **Codex usage**: read Codex's session logs as well as Claude's.
+2. **Policy for Codex and Gemini**, once their hooks' permission decisions are verified.
+3. **A resession extension** that restores tab and window placement along with agents.
+4. **Memory staleness**: mark memories whose files changed a lot since they were written.
 3. **Jump-mode letters** over waiting agents, tabby/barbar style.
 4. **Mailbox and MCP messaging** surfaced on the board.
 5. **Opt-in claudecode.nvim interop**, passing `CLAUDE_CODE_SSE_PORT` so diffs open in
@@ -349,7 +363,7 @@ Requires Neovim 0.10+ (LazyVim itself needs 0.11).
 | `<leader>jc` | in a review diff: comment on the line / selection |
 | `<leader>jT` | new task in a buffer (`:w` starts it) |
 | `<leader>jt` | new worktree agent from a one-line task |
-| `<leader>jm` | memory: what agents learned on this repo |
+| `<leader>jm` | memory: what agents learned on this repo (proposals first) |
 | `<leader>jf` | find agent (snacks picker, live preview) |
 | `<leader>j1`–`9` | agent in that slot |
 | `<leader>jp` | peek the most urgent agent |
@@ -362,7 +376,7 @@ Requires Neovim 0.10+ (LazyVim itself needs 0.11).
 Every key has a `<Plug>(nagare-…)` mapping.
 
 **Board:**
-- `⏎` jump · `p` peek · `d` review · `y`/`Y` approve (always) · `n` next waiting
+- `⏎` jump · `p` peek · `d` review · `y`/`Y` approve (always) · `n` next waiting · `F` send CI failures
 - `a`/`A` new agent · `w` worktree · `c` resume · `x` kill/forget · `r` rename
 - `o` project · `R` refresh · `1`–`9` slot · `g?` help · `q` close
 
@@ -373,10 +387,11 @@ Every key has a `<Plug>(nagare-…)` mapping.
 
 **Pickers:**
 - Agents: `<c-y>` approve · `<c-o>` peek · `<c-x>` kill/forget
-- Memory: `<c-x>` archive · `<c-e>` new
+- Memory: `<c-y>` approve proposal · `<c-x>` archive / reject · `<c-e>` new
 
 **Commands:** `:Nagare` followed by one of:
 `board`, `pick`, `next`, `next-review`, `review`, `comment`, `task`, `peek`, `toggle`,
 `slot N`, `new [agent] [dir]`, `worktree <name> [agent]`, `fanout N [agents] <task>`,
-`broadcast <text>`, `memory [new|query]`, `verify [cmd]`, `project [dir]`, `send [text]`,
+`broadcast <text>`, `memory [new|query]`, `verify [cmd]`, `policy [ask|auto|turbo]`,
+`trust`, `ci`, `project [dir]`, `send [text]`,
 `rename <name>`, `resume`, `detach`.

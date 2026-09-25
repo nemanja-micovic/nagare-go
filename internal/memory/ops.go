@@ -285,3 +285,93 @@ func (s *Store) Context(cwd string, budget int) string {
 	}
 	return head + "\n" + body + "\n" + tail
 }
+
+// lessonCues mark a sentence in an agent's final message that reads like a
+// lesson rather than a progress report.
+var lessonCues = []string{
+	"root cause", "turns out", "turned out", "the fix was", "the issue was", "the problem was",
+	"gotcha", "doesn't work because", "does not work because", "you need to", "make sure to",
+	"important:", "note that", "the trick is", "caveat",
+}
+
+// Lesson picks the sentences of an agent's final message that look worth
+// remembering, or "" if none do. Deliberately conservative: a proposal the
+// human has to reject costs attention.
+func Lesson(message string) string {
+	text := strings.Join(strings.Fields(message), " ")
+	if len(text) < 40 {
+		return ""
+	}
+	sentences := regexp.MustCompile(`[^.!?]+[.!?]*`).FindAllString(text, -1)
+	var picked []string
+	for i, s := range sentences {
+		low := strings.ToLower(s)
+		for _, cue := range lessonCues {
+			if strings.Contains(low, cue) {
+				picked = append(picked, strings.TrimSpace(s))
+				// The sentence after a cue usually carries the "so do X".
+				if i+1 < len(sentences) && len(picked) < 3 {
+					picked = append(picked, strings.TrimSpace(sentences[i+1]))
+				}
+				break
+			}
+		}
+		if len(picked) >= 3 {
+			break
+		}
+	}
+	if len(picked) == 0 {
+		return ""
+	}
+	return strings.Join(unique(picked), " ")
+}
+
+// Propose records a lesson from an agent's final message as a pending
+// memory — invisible to recall until a human approves it. It returns false
+// when there is no lesson, it repeats a memory (active or pending), or it
+// holds something that looks like a secret.
+func (s *Store) Propose(cwd, message string, who Who) (Memory, bool) {
+	lesson := Lesson(message)
+	if lesson == "" || ContainsSecret(lesson) {
+		return Memory{}, false
+	}
+	key, root := ProjectKey(cwd)
+	if _, dup := Similar(s.Load(key, true), lesson); dup {
+		return Memory{}, false
+	}
+	now := time.Now().UTC()
+	title := lesson
+	if r := []rune(title); len(r) > 100 {
+		title = string(r[:99]) + "…"
+	}
+	m := Memory{
+		ID: newID(), Kind: "gotcha", Scope: "project", Status: "pending", Author: who.Author, Session: who.Session,
+		Commit: headCommit(cwd), Created: now, Updated: now,
+		Body: title + "\n\n" + lesson + "\n\n(proposed from the agent's final message — edit before approving if needed)",
+	}
+	if err := s.Save(key, root, &m); err != nil {
+		return Memory{}, false
+	}
+	return m, true
+}
+
+// Pending lists proposed memories awaiting a decision.
+func (s *Store) Pending(cwd string) []Memory {
+	key, _ := ProjectKey(cwd)
+	var out []Memory
+	for _, m := range s.Load(key, true) {
+		if m.Status == "pending" {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// Decide approves (active) or rejects (archived) a pending memory.
+func (s *Store) Decide(cwd, id string, approve bool) (Memory, error) {
+	status := "archived"
+	if approve {
+		status = "active"
+	}
+	return s.Update(cwd, UpdateInput{ID: id, Status: status})
+}

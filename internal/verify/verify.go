@@ -33,18 +33,31 @@ const MaxAttempts = 3
 // than this, so a slow suite reports failure rather than being killed.
 const Timeout = 8 * time.Minute
 
-// Find returns the verify command for the repository containing dir, looking
-// in dir's worktree first and then the main checkout, or "" if there is none.
-func Find(dir string) string {
+// FindFile returns the path of a .nagare file (e.g. FileName) for the
+// repository containing dir: the worktree's copy first, then the main
+// checkout's. "" if neither exists.
+func FindFile(dir, name string) string {
 	for _, root := range roots(dir) {
-		data, err := os.ReadFile(filepath.Join(root, FileName))
-		if err == nil {
-			if cmd := command(string(data)); cmd != "" {
-				return cmd
-			}
+		path := filepath.Join(root, name)
+		if _, err := os.Stat(path); err == nil {
+			return path
 		}
 	}
 	return ""
+}
+
+// Find returns the verify command for the repository containing dir and the
+// file it came from, or "" if there is none.
+func Find(dir string) (cmd, file string) {
+	file = FindFile(dir, FileName)
+	if file == "" {
+		return "", ""
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return "", ""
+	}
+	return command(string(data)), file
 }
 
 // command drops comment lines ("# ...") and blank lines; what remains is run

@@ -30,7 +30,9 @@ nagare-go mcp              # run MCP server (stdio, for agent CLIs)
 nagare-go tool <name> [json]  # invoke a messaging tool directly (hidden; for pi)
 nagare-go ls               # tmux agents as JSON (read by the Neovim plugin)
 nagare-go nvim [name]      # attach to a persistent headless Neovim that owns agents
-nagare-go memory ls|search|add|context|path [--json]  # shared agent memory
+nagare-go memory ls|search|add|context|path|pending|approve|reject [--json]  # shared agent memory
+nagare-go trust [--check|--revoke]  # approve a repo's .nagare/verify and .nagare/policy
+nagare-go usage <transcript>... [--json]  # tokens, context fill, API-equivalent cost
 ```
 
 ## Neovim plugin (experiment)
@@ -77,6 +79,19 @@ install spec in `docs/nvim.md`. Requires Neovim 0.10+.
 - Memory: files are the truth (one per memory), no DB; `remember` refuses near-duplicates and
   secrets; nothing is hard-deleted (archive/). MCP tools, the pi bridge and the Codex skill
   must list the same tools — tests enforce it.
+- **Trust:** `.nagare/verify` and `.nagare/policy` act only when `trust.Store` has their exact
+  contents approved; keyed by main checkout + repo-relative path, so worktree copies share
+  an approval but an agent's edit revokes it. Never add a repo file that acts on the user's
+  behalf without the same gate.
+- Policy: deny rules return "ask" (a human decides), never a silent deny; auto approves edits
+  only inside the agent's cwd. Only Claude's PreToolUse is answered (`--agent claude`).
+- Usage prices live in `internal/usage` (per-model cache-read rates differ: Fable 5.1 0.025x,
+  Opus 5.5 0.05x, else 0.1x); cost is "API-equivalent". Transcript lines repeat usage per
+  content block — dedupe by message id.
+- Memory proposals (`memory.Lesson`) are pending until approved and invisible to recall; the
+  hook proposes only on idle transitions with a final message and never when it printed output.
+- CI loop polls `gh` only while an agent has an open PR (`ci.lua`); `config.gh` is swappable
+  for tests.
 - Snacks picker keys must avoid snacks' defaults (`<c-n>`, `<c-p>`, `<c-a>`… taken).
 - Board: one key table drives maps (with desc), hint line and `g?` help; hint line trimmed
   in drop order with `q close` reserved; highlights via extmarks; `board_spec` checks every
@@ -106,6 +121,9 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
 - `internal/memory` — shared agent memory: Markdown files + per-query BM25, MCP tools, SessionStart digest
 - `internal/verify` — runs a project's `.nagare/verify` when an agent stops (the verify gate)
+- `internal/policy` — `.nagare/policy` autonomy modes answering Claude's PreToolUse
+- `internal/trust` — content-hash approval of repo `.nagare/*` files (direnv-style)
+- `internal/usage` — tokens/context/cost from Claude Code transcripts
 - `internal/nvim` — `nagare-go ls` (tmux agents as JSON) and `nagare-go nvim` (persistent runtime)
 
 ### Worktrees

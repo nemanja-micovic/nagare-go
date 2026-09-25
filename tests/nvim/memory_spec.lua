@@ -102,4 +102,36 @@ return {
       eq(seen[1].id, "nagare:memory")
     end)
   end },
+
+  { "memory: an agent's lesson is proposed, announced, and approved from the editor", function()
+    with_bin(function(bin, home)
+      local repo = git_repo("mem-propose")
+      config.set("notify", { waiting = true, finished = true, min_seconds = 0, memory = true })
+      memory.watch(repo)
+      local seen = {}
+      local orig = vim.notify
+      vim.notify = function(msg)
+        table.insert(seen, msg)
+      end
+      local ok, err = pcall(function()
+        local event = vim.json.encode({ hook_event_name = "Stop", session_id = "p1", cwd = repo,
+          last_assistant_message = "Done. It turns out the dev server caches env vars at boot, so restart it after editing .env files." })
+        vim.fn.system({ "sh", "-c", "HOME='" .. home .. "' '" .. bin .. "' hook-state" }, event)
+        wait_for(3000, function()
+          return #memory.pending(repo) == 1
+        end, "a pending proposal")
+        wait_for(2000, function()
+          return #seen > 0
+        end, "announced")
+        truthy(seen[1]:find("proposed a memory", 1, true), seen[1])
+        eq(#memory.list(repo), 0, "not active yet")
+        local p = memory.pending(repo)[1]
+        truthy(memory.decide(repo, p.id, true))
+        eq(#memory.pending(repo), 0)
+        eq(memory.list(repo)[1].id, p.id, "approved into the list")
+      end)
+      vim.notify = orig
+      assert(ok, err)
+    end)
+  end },
 }

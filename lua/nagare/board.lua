@@ -219,6 +219,12 @@ M.keys = {
       end
     end)
   end },
+  { "F", nil, "Send failing CI logs to the agent", function()
+    local e = selected_agent()
+    if e and e.source == "nvim" then
+      require("nagare.ci").send_failures(e)
+    end
+  end },
   { "Y", nil, "Approve always (the option below Yes)", function()
     approve(true)
   end },
@@ -281,6 +287,10 @@ function M.build(width)
       head:add("  "):add(("%s %d %s"):format(icon, counts[s], word), s == "review" and "NagareReview" or nagare.status_hl[s])
     end
   end
+  local spent = require("nagare.usage").total()
+  if spent > 0 then
+    head:add(("  $%.2f"):format(spent), "NagareDim")
+  end
   if #groups == 0 then
     head:add("  no agents yet — a starts one here, o opens a project", "NagareDim")
   end
@@ -308,6 +318,10 @@ function M.build(width)
       table.insert(right, "tab " .. g.tab)
     end
     local repo = util.describe(g.root)
+    local mode = require("nagare.policy").mode(g.root)
+    if mode and mode ~= "ask" then
+      table.insert(right, "⚡" .. mode)
+    end
     if repo.branch then
       table.insert(right, repo.branch)
     end
@@ -347,6 +361,23 @@ function M.build(width)
         changes = changes .. " ✓"
       elseif e.verify == "fail" then
         changes = changes .. " ✗"
+      elseif e.verify == "untrusted" then
+        changes = changes .. " ⚠verify"
+      end
+      if e.source == "nvim" then
+        local ci = require("nagare.ci").label(e)
+        if ci ~= "" then
+          changes = changes .. " " .. ci
+        end
+      end
+      if (e.auto_approved or 0) > 0 then
+        changes = ("⚡%d "):format(e.auto_approved) .. changes
+      end
+      if e.source == "nvim" then
+        local use = require("nagare.usage").label(e)
+        if use ~= "" then
+          changes = use .. "  " .. changes
+        end
       end
       changes = vim.trim(changes)
       if changes ~= "" then

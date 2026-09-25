@@ -203,3 +203,44 @@ func TestGlobalMemoriesReachEveryRepo(t *testing.T) {
 		t.Errorf("global memory not recalled from another repo: %v", hits)
 	}
 }
+
+func TestLessonIsConservative(t *testing.T) {
+	if Lesson("Done. Added the endpoint and tests; all green.") != "" {
+		t.Error("a progress report is not a lesson")
+	}
+	got := Lesson("Fixed it. The root cause was that the cache key ignored the locale. Include the locale in cacheKey() when adding translations. Tests pass.")
+	if !strings.Contains(got, "root cause was that the cache key ignored the locale") || !strings.Contains(got, "Include the locale") {
+		t.Errorf("lesson = %q", got)
+	}
+	if strings.Contains(got, "Tests pass") {
+		t.Errorf("unrelated sentence picked: %q", got)
+	}
+}
+
+func TestProposeIsPendingUntilApproved(t *testing.T) {
+	root := repo(t)
+	s := store(t)
+	msg := "All done. It turns out the migrations must run before seeding, otherwise the seed silently skips tables. Run make migrate first."
+	m, ok := s.Propose(root, msg, Who{Author: "claude"})
+	if !ok || m.Status != "pending" {
+		t.Fatalf("proposal = %+v %v", m, ok)
+	}
+	if hits := s.Recall(root, RecallInput{Query: "migrations seeding"}); len(hits) != 0 {
+		t.Error("a pending memory must not be recalled")
+	}
+	if _, again := s.Propose(root, msg, Who{}); again {
+		t.Error("the same lesson proposed twice")
+	}
+	if len(s.Pending(root)) != 1 {
+		t.Fatalf("pending = %d", len(s.Pending(root)))
+	}
+	if _, err := s.Decide(root, m.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if hits := s.Recall(root, RecallInput{Query: "migrations seeding"}); len(hits) != 1 {
+		t.Error("approved memory should be recalled")
+	}
+	if _, ok := s.Propose(root, "Progress: wrote code.", Who{}); ok {
+		t.Error("no lesson, no proposal")
+	}
+}

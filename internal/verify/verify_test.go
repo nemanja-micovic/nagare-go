@@ -22,7 +22,7 @@ func repo(t *testing.T) string {
 
 func TestFindLooksInTheWorktreeThenTheMainCheckout(t *testing.T) {
 	root := repo(t)
-	if got := Find(root); got != "" {
+	if got, _ := Find(root); got != "" {
 		t.Fatalf("no file: got %q", got)
 	}
 	if err := os.MkdirAll(filepath.Join(root, ".nagare"), 0o755); err != nil {
@@ -31,7 +31,7 @@ func TestFindLooksInTheWorktreeThenTheMainCheckout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, FileName), []byte("  go test ./...\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := Find(root); got != "go test ./..." {
+	if got, _ := Find(root); got != "go test ./..." {
 		t.Errorf("main checkout: got %q", got)
 	}
 	wt := filepath.Join(root, ".worktrees", "feat")
@@ -40,7 +40,7 @@ func TestFindLooksInTheWorktreeThenTheMainCheckout(t *testing.T) {
 	}
 	// The file is untracked, so the worktree does not have it: it falls back
 	// to the main checkout's.
-	if got := Find(filepath.Join(wt)); got != "go test ./..." {
+	if got, file := Find(filepath.Join(wt)); got != "go test ./..." || file != filepath.Join(root, FileName) {
 		t.Errorf("worktree fallback: got %q", got)
 	}
 }

@@ -74,8 +74,10 @@ type SessionState struct {
 	NotificationType string `json:"notification_type,omitempty"`
 	LastMessage      string `json:"last_message,omitempty"`
 	LastTool         string `json:"last_tool,omitempty"`       // what the agent is doing or asking to do, e.g. "Bash: go test ./..."
+	TranscriptPath   string `json:"transcript_path,omitempty"` // the agent's session log, for usage and cost
 	Verify           string `json:"verify,omitempty"`          // "pass" or "fail": the project's .nagare/verify at the last stop
 	VerifyFailures   int    `json:"verify_failures,omitempty"` // stops blocked by verify since the last prompt
+	AutoApproved     int    `json:"auto_approved,omitempty"`   // tool calls the project's policy approved this session
 	Timestamp        string `json:"timestamp"`
 }
 

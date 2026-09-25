@@ -42,11 +42,21 @@ function M.apply(state)
   if agent.status == "dead" and agent.exit_code then
     return true
   end
+  if state.verify == "untrusted" and agent.verify ~= "untrusted" then
+    vim.notify(("nagare: %s has a .nagare/verify you have not approved, so it did not run — :Nagare trust")
+      :format(agent.project), vim.log.levels.WARN, { title = "nagare", id = "nagare:trust:" .. agent.root })
+  end
   local status = hook_states[state.state] or "idle"
+  if state.transcript_path and state.transcript_path ~= "" then
+    agent.transcript = state.transcript_path
+    require("nagare.usage").refresh(agent)
+  end
   agents.set_status(agent, status, {
     session_id = (state.session_id and state.session_id ~= "") and state.session_id or agent.session_id,
     event = state.event,
     last_tool = state.last_tool ~= "" and state.last_tool or nil,
+    auto_approved = state.auto_approved,
+    transcript = (state.transcript_path and state.transcript_path ~= "") and state.transcript_path or agent.transcript,
     verify = state.verify ~= "" and state.verify or nil,
     notification_type = state.notification_type,
     last_message = (state.last_message and state.last_message ~= "") and state.last_message or agent.last_message,

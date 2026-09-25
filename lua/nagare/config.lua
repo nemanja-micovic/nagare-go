@@ -105,6 +105,10 @@ local defaults = {
 
   -- Replace the tabline with project names and agent status dots.
   tabline = false,
+
+  -- The GitHub CLI, for pull requests and the CI loop.
+  gh = "gh",
+  ci_poll_ms = 60000,
 }
 
 local M = {}
@@ -145,6 +149,8 @@ local types = {
   board = "table",
   peek = "table",
   tabline = "boolean",
+  gh = "string",
+  ci_poll_ms = "number",
 }
 
 --- Checks options, returning a list of problems (empty when valid). Plain

@@ -154,7 +154,38 @@ func newMemoryCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(ls, search, add, context, path)
+	pending := &cobra.Command{
+		Use:   "pending",
+		Short: "Memories proposed from agents' final messages, awaiting approval",
+		RunE: func(c *cobra.Command, args []string) error {
+			var entries []memoryEntry
+			var lines []string
+			now := time.Now()
+			for _, m := range memory.Open().Pending(dir()) {
+				entries = append(entries, entry(m, 0))
+				lines = append(lines, memory.Line(m, now))
+			}
+			return print(entries, lines)
+		},
+	}
+	decide := func(approve bool) func(*cobra.Command, []string) error {
+		return func(c *cobra.Command, args []string) error {
+			for _, id := range args {
+				m, err := memory.Open().Decide(dir(), id, approve)
+				if err != nil {
+					return err
+				}
+				if !asJSON {
+					fmt.Printf("[%s] %s: %s\n", m.ID, m.Status, m.Title())
+				}
+			}
+			return nil
+		}
+	}
+	approve := &cobra.Command{Use: "approve <id>...", Short: "Approve proposed memories", Args: cobra.MinimumNArgs(1), RunE: decide(true)}
+	reject := &cobra.Command{Use: "reject <id>...", Short: "Reject proposed memories (archived, not deleted)", Args: cobra.MinimumNArgs(1), RunE: decide(false)}
+
+	cmd.AddCommand(ls, search, add, context, path, pending, approve, reject)
 	for _, sub := range cmd.Commands() {
 		sub.SilenceUsage = true
 	}

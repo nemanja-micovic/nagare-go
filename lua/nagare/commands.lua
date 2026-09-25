@@ -97,6 +97,35 @@ M.subcommands = {
       return vim.startswith("new", lead) and { "new" } or {}
     end,
   },
+  ci = {
+    -- :Nagare ci — watch the PR of the agent in this terminal (or the last used)
+    impl = function()
+      local agents = require("nagare.agents")
+      local a = agents.from_buf(0) or agents.last_used(require("nagare.projects").current_root())
+      if not a then
+        vim.notify("nagare: no agent here", vim.log.levels.WARN)
+      elseif not require("nagare.ci").track(a) then
+        vim.notify("nagare: no pull request found for " .. a.name .. " (needs gh and a pushed branch)", vim.log.levels.WARN)
+      end
+    end,
+  },
+  policy = {
+    -- :Nagare policy [ask|auto|turbo] — how much agents may do without asking
+    impl = function(args)
+      require("nagare.policy").set(require("nagare.projects").current_root(), args[1])
+    end,
+    complete = function(lead)
+      return vim.tbl_filter(function(m)
+        return vim.startswith(m, lead)
+      end, { "ask", "auto", "turbo" })
+    end,
+  },
+  trust = {
+    -- :Nagare trust — show this repository's .nagare files and approve them
+    impl = function()
+      require("nagare.trust").prompt(require("nagare.projects").current_root())
+    end,
+  },
   verify = {
     -- :Nagare verify [command] — create or edit the project's .nagare/verify
     impl = function(args)
@@ -105,6 +134,8 @@ M.subcommands = {
       if #args > 0 then
         vim.fn.mkdir(root .. "/.nagare", "p")
         vim.fn.writefile({ table.concat(args, " ") }, path)
+        -- You wrote it yourself, here: that is the approval.
+        require("nagare.trust").allow(path)
         vim.notify("nagare: agents in " .. vim.fn.fnamemodify(root, ":t") .. " must pass `" .. table.concat(args, " ")
           .. "` before they stop", vim.log.levels.INFO)
         return

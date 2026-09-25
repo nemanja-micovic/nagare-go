@@ -714,6 +714,7 @@ function M._init()
       agents().track_mode(ev)
     end,
   })
+  require("nagare.trust").setup_autocmd(group)
   api.nvim_create_autocmd("VimResized", {
     group = group,
     callback = function()
@@ -729,6 +730,7 @@ function M._init()
       agents().shutdown()
       pcall(function()
         require("nagare.memory").stop()
+        require("nagare.ci").stop()
       end)
       require("nagare.status").stop()
       require("nagare.tmux").stop()

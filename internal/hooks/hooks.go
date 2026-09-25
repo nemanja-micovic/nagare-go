@@ -12,8 +12,10 @@ import (
 	"github.com/nemke/nagare-go/internal/memory"
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/notifications"
+	"github.com/nemke/nagare-go/internal/policy"
 	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemke/nagare-go/internal/trust"
 	"github.com/nemke/nagare-go/internal/verify"
 )
 
@@ -26,6 +28,7 @@ type HookEvent struct {
 	LastAssistantMessage string          `json:"last_assistant_message"`
 	NotificationType     string          `json:"notification_type"`
 	ToolName             string          `json:"tool_name"`
+	TranscriptPath       string          `json:"transcript_path"`
 	ToolInput            json.RawMessage `json:"tool_input"`
 	// StopHookActive is present only in Claude Code's Stop envelope, which is
 	// also the one that honours a "block" decision; true when Claude is
@@ -43,18 +46,7 @@ func DescribeTool(name string, input json.RawMessage) string {
 	if name == "" {
 		return ""
 	}
-	var fields map[string]any
-	if len(input) > 0 {
-		_ = json.Unmarshal(input, &fields)
-	}
-	detail := ""
-	for _, k := range toolFields {
-		if v, ok := fields[k].(string); ok && strings.TrimSpace(v) != "" {
-			detail = v
-			break
-		}
-	}
-	detail = strings.Join(strings.Fields(detail), " ")
+	detail := ToolDetail(input)
 	if r := []rune(detail); len(r) > 160 {
 		detail = string(r[:159]) + "…"
 	}
@@ -69,18 +61,75 @@ func DescribeTool(name string, input json.RawMessage) string {
 // get memory through the tools only.
 var injectsContext = map[string]bool{"claude": true, "codex": true}
 
+// ToolDetail is what a tool call is about — the command, file path or URL —
+// whitespace-collapsed but complete, for matching policy rules.
+func ToolDetail(input json.RawMessage) string {
+	var fields map[string]any
+	if len(input) > 0 {
+		_ = json.Unmarshal(input, &fields)
+	}
+	for _, k := range toolFields {
+		if v, ok := fields[k].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.Join(strings.Fields(v), " ")
+		}
+	}
+	return ""
+}
+
+// ApplyPolicy answers a Claude PreToolUse from the project's policy: stdout
+// carries the decision, and the state counts what was approved without
+// asking. A policy with no opinion leaves the agent's own flow in charge.
+func ApplyPolicy(ev HookEvent, st models.SessionState, p *policy.Policy) (models.SessionState, string) {
+	if p == nil || ev.HookEventName != "PreToolUse" || ev.ToolName == "" {
+		return st, ""
+	}
+	d := p.Decide(policy.Call{Tool: ev.ToolName, Detail: ToolDetail(ev.ToolInput), Cwd: ev.Cwd})
+	if d.Verdict == "" {
+		return st, ""
+	}
+	if d.Verdict == "allow" {
+		st.AutoApproved++
+	}
+	out, _ := json.Marshal(map[string]any{
+		"hookSpecificOutput": map[string]string{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       d.Verdict,
+			"permissionDecisionReason": d.Reason,
+		},
+	})
+	return st, string(out)
+}
+
+// projectPolicy loads the approved policy for cwd, or nil.
+func projectPolicy(cwd string) *policy.Policy {
+	file := verify.FindFile(cwd, policy.FileName)
+	if file == "" || !trust.Open().Trusted(file) {
+		return nil
+	}
+	p, err := policy.Load(file)
+	if err != nil {
+		return nil
+	}
+	return &p
+}
+
 // resetsTool marks events after which the last tool call is history.
 var resetsTool = map[string]bool{"UserPromptSubmit": true, "Stop": true, "SessionStart": true, "AfterAgent": true}
 
-// Verifier finds and runs a project's checks; tests swap it out.
+// Verifier finds and runs a project's checks; tests swap it out. Find
+// returns the command and whether the user approved the file it came from.
 type Verifier struct {
-	Find func(cwd string) string
+	Find func(cwd string) (cmd string, trusted bool)
 	Run  func(cwd, cmd string) verify.Result
 }
 
-// DefaultVerifier runs `.nagare/verify` for real.
+// DefaultVerifier runs `.nagare/verify` for real — only once its contents
+// are approved (`nagare-go trust`), since the file comes with the repository.
 var DefaultVerifier = Verifier{
-	Find: verify.Find,
+	Find: func(cwd string) (string, bool) {
+		cmd, file := verify.Find(cwd)
+		return cmd, cmd != "" && trust.Open().Trusted(file)
+	},
 	Run: func(cwd, cmd string) verify.Result {
 		return verify.Run(cwd, cmd, verify.Timeout)
 	},
@@ -98,11 +147,16 @@ func Decide(ev HookEvent, prev models.SessionState, hasPrev bool, v Verifier, no
 		Event:            ev.HookEventName,
 		NotificationType: ev.NotificationType,
 		LastMessage:      ev.LastAssistantMessage,
+		TranscriptPath:   ev.TranscriptPath,
 		Timestamp:        now,
 	}
 	same := hasPrev && prev.SessionID == ev.SessionID
+	if st.TranscriptPath == "" && same {
+		st.TranscriptPath = prev.TranscriptPath
+	}
 	if same {
 		st.Verify, st.VerifyFailures = prev.Verify, prev.VerifyFailures
+		st.AutoApproved = prev.AutoApproved
 	}
 
 	switch tool := DescribeTool(ev.ToolName, ev.ToolInput); {
@@ -121,7 +175,13 @@ func Decide(ev HookEvent, prev models.SessionState, hasPrev bool, v Verifier, no
 	// The verify gate: Claude wants to stop; the task is done only if the
 	// project's own checks agree.
 	if ev.HookEventName == "Stop" && ev.StopHookActive != nil && v.Find != nil {
-		if cmd := v.Find(ev.Cwd); cmd != "" {
+		cmd, trusted := v.Find(ev.Cwd)
+		if cmd != "" && !trusted {
+			// A verify file nobody approved does nothing but say so.
+			st.Verify = "untrusted"
+			return st, ""
+		}
+		if cmd != "" {
 			if st.VerifyFailures >= verify.MaxAttempts {
 				// Out of attempts: let it stop, flagged, for a human.
 				st.Verify = "fail"
@@ -261,6 +321,18 @@ func Handle(agent string) {
 	prevState, hasPrev := state.LoadStateByID(statesDir, event.SessionID)
 
 	newSessionState, stdout := Decide(event, prevState, hasPrev, DefaultVerifier, now)
+	if newSessionState.State == "idle" && event.LastAssistantMessage != "" && stdout == "" {
+		// A turn ended with what reads like a lesson: propose it for the
+		// shared memory. Pending until the human approves; never blocks.
+		memory.Open().Propose(event.Cwd, event.LastAssistantMessage, memory.Who{Author: PaneID(), Session: event.SessionID})
+	}
+	if agent == "claude" && event.HookEventName == "PreToolUse" {
+		var out string
+		newSessionState, out = ApplyPolicy(event, newSessionState, projectPolicy(event.Cwd))
+		if out != "" {
+			stdout = out
+		}
+	}
 	if event.HookEventName == "SessionStart" && injectsContext[agent] {
 		// What agents learned on this repository, so this session starts
 		// where the last ones left off. Covers startup, resume, /clear and

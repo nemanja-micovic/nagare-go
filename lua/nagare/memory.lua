@@ -39,6 +39,21 @@ function M.list(root, query)
   return util.json_decode(table.concat(out, "\n")) or {}
 end
 
+--- Memories proposed from agents' final messages, awaiting a decision.
+function M.pending(root)
+  if not available() then
+    return {}
+  end
+  local out, ok = run({ "pending", "--json" }, root)
+  return ok and (util.json_decode(table.concat(out, "\n")) or {}) or {}
+end
+
+--- Approves (true) or rejects (false) a proposed memory.
+function M.decide(root, id, approve)
+  local _, ok = run({ approve and "approve" or "reject", id }, root)
+  return ok
+end
+
 function M.dir(root)
   local out, ok = run({ "path" }, root)
   return ok and out[1] or nil
@@ -142,6 +157,23 @@ function M.pick(root)
   if snacks and snacks.picker and snacks.picker.sources and snacks.picker.sources.nagare_memory then
     return snacks.picker.nagare_memory({ root = root })
   end
+  local proposals = M.pending(root)
+  if #proposals > 0 then
+    local m = proposals[1]
+    vim.ui.select({ "Approve", "Reject", "Open to edit", "Later" }, {
+      prompt = ("Proposed memory (%d waiting): %s"):format(#proposals, m.title),
+    }, function(choice)
+      if choice == "Approve" or choice == "Reject" then
+        M.decide(root, m.id, choice == "Approve")
+        vim.schedule(function()
+          M.pick(root)
+        end)
+      elseif choice == "Open to edit" then
+        M.open(m)
+      end
+    end)
+    return
+  end
   local items = M.list(root)
   if #items == 0 then
     vim.notify("nagare: no memories yet for " .. util.basename(root) .. " — agents save them with remember; :Nagare memory new to write one", vim.log.levels.INFO)
@@ -164,7 +196,7 @@ local function announce(dir, name)
   if not ok then
     return
   end
-  local author, kind, title, in_head = "an agent", "fact", nil, false
+  local author, kind, title, in_head, pending = "an agent", "fact", nil, false, false
   for i, l in ipairs(lines) do
     if i == 1 and l == "---" then
       in_head = true
@@ -173,13 +205,21 @@ local function announce(dir, name)
     elseif in_head then
       author = l:match("^author:%s*(.+)") or author
       kind = l:match("^kind:%s*(.+)") or kind
+      pending = pending or l:match("^status:%s*pending") ~= nil
     elseif not title and vim.trim(l) ~= "" then
       title = vim.trim(l:gsub("^#+%s*", ""))
     end
   end
   if title and author ~= "user" then
-    vim.notify(("🧠 %s remembered (%s): %s"):format(author, kind, title), vim.log.levels.INFO,
-      { title = "nagare", id = "nagare:memory", timeout = 4000 })
+    if pending then
+      local key = type(config.keys) == "table" and config.keys.memory
+      vim.notify(("🧠 %s proposed a memory: %s%s"):format(author, title,
+        key and ("  (" .. key:gsub("<leader>", vim.g.mapleader == " " and "␣" or "<leader>") .. " to approve)") or ""),
+        vim.log.levels.INFO, { title = "nagare", id = "nagare:memory", timeout = 6000 })
+    else
+      vim.notify(("🧠 %s remembered (%s): %s"):format(author, kind, title), vim.log.levels.INFO,
+        { title = "nagare", id = "nagare:memory", timeout = 4000 })
+    end
   end
 end
 
@@ -232,9 +272,16 @@ M.source = {
   title = "Memory",
   finder = function(opts)
     local items = {}
-    for i, m in ipairs(M.list(opts.root or require("nagare.projects").current_root())) do
+    local root = opts.root or require("nagare.projects").current_root()
+    -- Proposals first: they are waiting on you.
+    for _, m in ipairs(M.pending(root)) do
+      table.insert(items, { idx = #items + 1, memory = m, file = m.file, root = root, pending = true,
+        text = "pending " .. m.title })
+    end
+    for i, m in ipairs(M.list(root)) do
       table.insert(items, {
-        idx = i,
+        idx = #items + 1,
+        root = root,
         memory = m,
         file = m.file,
         text = table.concat({ m.title, m.kind, m.scope, table.concat(m.tags or {}, " "), table.concat(m.paths or {}, " ") }, " "),
@@ -245,7 +292,7 @@ M.source = {
   format = function(item)
     local m = item.memory
     return {
-      { (kind_icon[m.kind] or "·") .. " ", "NagareKey" },
+      { item.pending and "⏳ " or ((kind_icon[m.kind] or "·") .. " "), item.pending and "NagareWaiting" or "NagareKey" },
       { m.title },
       { "  " .. m.kind, "NagareDim" },
       { m.scope == "global" and "  global" or "", "NagareDim" },
@@ -261,7 +308,20 @@ M.source = {
     end
   end,
   actions = {
+    nagare_memory_approve = function(picker, item)
+      if item and item.pending and M.decide(item.root, item.memory.id, true) then
+        vim.notify("nagare: approved " .. item.memory.title, vim.log.levels.INFO)
+        picker:find()
+      end
+    end,
     nagare_memory_archive = function(picker, item)
+      if item and item.pending then
+        if M.decide(item.root, item.memory.id, false) then
+          vim.notify("nagare: rejected " .. item.memory.title, vim.log.levels.INFO)
+          picker:find()
+        end
+        return
+      end
       if item and M.archive(item.memory) then
         vim.notify("nagare: archived " .. item.memory.title, vim.log.levels.INFO)
         picker:find()
@@ -275,7 +335,8 @@ M.source = {
   win = {
     input = {
       keys = {
-        ["<c-x>"] = { "nagare_memory_archive", mode = { "n", "i" }, desc = "Archive" },
+        ["<c-y>"] = { "nagare_memory_approve", mode = { "n", "i" }, desc = "Approve proposal" },
+        ["<c-x>"] = { "nagare_memory_archive", mode = { "n", "i" }, desc = "Archive / reject" },
         -- Keys snacks leaves free (<c-n> is its list-down).
         ["<c-e>"] = { "nagare_memory_new", mode = { "n", "i" }, desc = "New memory" },
       },

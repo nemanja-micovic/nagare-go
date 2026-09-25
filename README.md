@@ -120,7 +120,8 @@ It runs the whole loop in Neovim:
 - write a task in a buffer and `:w` to start a worktree agent (`<leader>jT`);
 - agents can't finish until your checks pass (`.nagare/verify`);
 - review their diff and send comments back to the agent that wrote it (`<leader>jr`);
-- merge only when the checks pass.
+- merge only when the checks pass, open a PR, and have CI failures sent back to the agent;
+- set how much agents may do without asking (`:Nagare policy auto`), and see what each one costs.
 
 Agents also share a memory per repository (`remember`/`recall`), so they stop relearning
 the same things. `<leader>jj` opens the board, `<leader>jw` jumps to the next waiting agent,

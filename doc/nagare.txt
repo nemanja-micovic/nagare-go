@@ -36,6 +36,10 @@ COMMANDS                                                     *:Nagare*
 :Nagare broadcast {text}     Send to every live agent in this project.
 :Nagare memory [new|{query}] Browse, search or write memories.
 :Nagare verify [{command}]   Set or edit the checks agents must pass.
+:Nagare policy [ask|auto|turbo]
+                             How much agents may do without asking.
+:Nagare trust                Review and approve this repo's .nagare files.
+:Nagare ci                   Watch the CI of this agent's pull request.
 :Nagare pick                 Fuzzy agent picker (snacks, with live preview).
 :Nagare slot {n}             Jump to the agent in slot {n}.
 :Nagare resume               Resume the agent whose terminal you are in.
@@ -93,13 +97,24 @@ it; on failure the stop is blocked and Claude is told why, up to 3 times. The
 board shows ✓ or ✗; merging from a review runs the same checks first.
 
 ==============================================================================
+POLICY AND TRUST                                    *nagare-policy* *nagare-trust*
+
+.nagare/policy answers Claude's permission requests: `mode: ask|auto|turbo`
+plus `allow:` and `deny:` rules like Bash(go test *). auto approves reads and
+edits inside the project; turbo approves everything; deny forces a human.
+.nagare/verify and .nagare/policy come with the repository, so they act only
+once you approve their exact contents (:Nagare trust, `nagare-go trust`, or
+saving the file yourself); any change needs approving again.
+
+==============================================================================
 MEMORY                                                          *nagare-memory*
 
 Agents save lessons with the `remember` MCP tool and search them with
 `recall`; memories are Markdown files per repository under
 ~/.local/share/nagare/memory, shared by every agent and worktree of the repo.
 Claude and Codex get a short digest when a session starts. <leader>jm browses
-them (<C-x> archive, <C-e> new); edit a note by editing its file.
+them (<C-x> archive, <C-e> new); edit a note by editing its file. Lessons in
+an agent's final message are proposed as pending memories: <C-y> approves.
 
 ==============================================================================
 NOTIFICATIONS                                            *nagare-notifications*

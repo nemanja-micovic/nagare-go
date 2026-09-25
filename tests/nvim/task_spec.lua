@@ -58,6 +58,15 @@ return {
   end },
 
   { "verify: merge is gated on the project's checks", function()
+    local bin = vim.env.NAGARE_BIN
+    if not bin or vim.fn.executable(bin) ~= 1 then
+      io.stdout:write("     (skipped: set NAGARE_BIN to a built nagare-go)\n")
+      return
+    end
+    local old_home, old_tmux = vim.env.HOME, vim.deepcopy(config.tmux)
+    vim.env.HOME = SANDBOX .. "/trusthome"
+    config.set("tmux", { enabled = false, bin = bin, poll_ms = 4000 })
+    local ok, err = pcall(function()
     config.agents.fake = { cmd = { "bash", "-c", 'while read -r l; do echo "GOT:$l"; done', "fake" }, sigil = "F" }
     local repo = git_repo("gate")
     vim.fn.mkdir(repo .. "/.nagare", "p")
@@ -70,6 +79,14 @@ return {
 
     local r = assert(review.open(a))
     local result
+    -- Not approved yet: refused without running.
+    review.run_verify(r, function(ok, out)
+      result = { ok = ok, out = out }
+    end)
+    eq(result.ok, false)
+    truthy(result.out[1]:find("not approved", 1, true), vim.inspect(result.out))
+    truthy(require("nagare.trust").allow(repo .. "/.nagare/verify"))
+    result = nil
     review.run_verify(r, function(ok, out)
       result = { ok = ok, out = out }
     end)
@@ -95,6 +112,10 @@ return {
     end, "second run")
     eq(result, true)
     review.close()
+    end)
+    vim.env.HOME = old_home
+    config.set("tmux", old_tmux)
+    assert(ok, err)
   end },
 
   { "board: a waiting agent's row names what it asks for", function()
@@ -105,5 +126,28 @@ return {
       table.insert(text, l.text)
     end
     truthy(table.concat(text, "\n"):find("Bash: rm -rf build", 1, true), table.concat(text, "\n"))
+  end },
+
+  { "policy: setting a mode writes the file, and the board shows it", function()
+    local repo = git_repo("policy")
+    local pol = require("nagare.policy")
+    eq(pol.mode(repo), nil)
+    pol.set(repo, "auto")
+    eq(pol.mode(repo), "auto")
+    local text = table.concat(vim.fn.readfile(repo .. "/.nagare/policy"), "\n")
+    truthy(text:find("deny: Bash(rm -rf *)", 1, true), "template keeps a deny list")
+    pol.set(repo, "turbo")
+    eq(pol.mode(repo), "turbo")
+    eq(#vim.tbl_filter(function(l) return l:match("^mode:") end, vim.fn.readfile(repo .. "/.nagare/policy")), 1)
+    require("nagare.projects").open(repo)
+    fake_agent({ root = repo, project = "policy", name = "fast", auto_approved = 12 })
+    local lines = require("nagare.board").build(140)
+    local out = {}
+    for _, l in ipairs(lines) do
+      table.insert(out, l.text)
+    end
+    local joined = table.concat(out, "\n")
+    truthy(joined:find("⚡turbo", 1, true), joined)
+    truthy(joined:find("⚡12", 1, true), joined)
   end },
 }

@@ -261,7 +261,8 @@ return {
     local sorted = vim.deepcopy(all)
     table.sort(sorted)
     eq(all, sorted)
-    eq(c.complete("p", "Nagare p"), { "peek", "pick", "project" })
+    eq(c.complete("pe", "Nagare pe"), { "peek" })
+    eq(c.complete("pr", "Nagare pr"), { "project" })
     eq(c.complete("co", "Nagare new co"), { "codex" })
     eq(c.complete("", "'<,'>Nagare "), all, "works after a range")
   end },

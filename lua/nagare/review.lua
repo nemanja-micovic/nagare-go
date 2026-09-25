@@ -447,12 +447,39 @@ function M.verify_command(agent)
   end
 end
 
+--- Whether a .nagare file's current contents are approved (nagare-go trust).
+--- Without nagare-go there is nothing to check against: treat as untrusted.
+function M.trusted(file)
+  local bin = require("nagare.config").tmux.bin
+  if vim.fn.executable(bin) ~= 1 then
+    return false
+  end
+  vim.fn.system({ bin, "trust", "--check", "--quiet", file })
+  return vim.v.shell_error == 0
+end
+
+--- The verify file in effect for an agent (worktree copy first).
+function M.verify_file(agent)
+  for _, dir in ipairs({ agent.cwd, agent.root }) do
+    local path = dir .. "/.nagare/verify"
+    if vim.fn.filereadable(path) == 1 then
+      return path
+    end
+  end
+end
+
 --- Runs the verify command in a terminal at the bottom of the review, then
 --- calls done(ok, output_lines). The editor stays usable while it runs.
 function M.run_verify(r, done)
   local cmd = M.verify_command(r.agent)
   if not cmd then
     done(true, {})
+    return
+  end
+  local file = M.verify_file(r.agent)
+  if not M.trusted(file) then
+    vim.notify("nagare: " .. file .. " is not approved — :Nagare trust to review and approve it", vim.log.levels.WARN)
+    done(false, { "verify not approved: " .. file })
     return
   end
   api.nvim_set_current_win(r.right_win)
@@ -659,6 +686,10 @@ function M.open(agent)
     require("nagare.peek").command({ "sh", "-c",
       ("git push -u origin %s && gh pr create --fill --head %s; echo; echo '(press a key)'; read -r _")
         :format(vim.fn.shellescape(branch), vim.fn.shellescape(branch)) }, "PR · " .. branch)
+    -- Watch its checks once the PR exists.
+    vim.defer_fn(function()
+      require("nagare.ci").track(agent)
+    end, 15000)
   end, "Push the branch and open a pull request")
   map("X", function()
     confirm(("Discard %s: delete its worktree and branch (%d files of changes)?"):format(agent.name, r.summary.files),
