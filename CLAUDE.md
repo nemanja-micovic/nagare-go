@@ -20,6 +20,7 @@ go vet ./...               # lint
 nagare-go                  # launch picker (default)
 nagare-go pick             # launch picker
 nagare-go demo [--speed N] # try nagare with simulated agents on a private tmux server
+nagare-go doctor           # check tmux, git, agents' hooks/MCP and status events, with fixes
 nagare-go hook-state       # handle agent hook/plugin/extension events (stdin JSON)
 nagare-go setup            # install status reporting + MCP server + slash commands
 nagare-go notifs           # notification center TUI
@@ -54,6 +55,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
 - `internal/paths` — the data directory (`$NAGARE_DATA_DIR`, default ~/.local/share/nagare)
 - `internal/demo` — `nagare-go demo`: simulated agents, throwaway repos, private tmux server
+- `internal/doctor` — `nagare-go doctor`: checks the files `setup` writes, so the two cannot disagree
 
 ### Worktrees
 

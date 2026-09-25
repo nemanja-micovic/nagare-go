@@ -32,6 +32,7 @@ cd nagare-go
 
 ./nagare-go demo        # try it with simulated agents — nothing touches your real setup
 ./nagare-go setup       # connect your real agents (hooks, MCP, slash commands)
+./nagare-go doctor      # check that everything is connected
 ./nagare-go             # open nagare
 ```
 
@@ -128,6 +129,7 @@ nagare-go new ~/proj -w my-feature   # new agent in a fresh git worktree
 nagare-go new myproto  # quick prototype in ~/Prototypes/
 nagare-go notifs       # notification center + settings
 nagare-go setup        # connect agents: status, MCP, slash commands
+nagare-go doctor       # check tmux, git and every agent's connection, with fixes
 nagare-go mcp          # MCP server (stdio, used by agent CLIs)
 ```
 

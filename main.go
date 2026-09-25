@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/charmbracelet/colorprofile"
 	"os"
 	"os/signal"
 	"runtime/pprof"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nemke/nagare-go/internal/config"
 	"github.com/nemke/nagare-go/internal/demo"
+	"github.com/nemke/nagare-go/internal/doctor"
 	"github.com/nemke/nagare-go/internal/hooks"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/mcp"
@@ -215,7 +217,21 @@ func main() {
 		},
 	}
 
-	rootCmd.AddCommand(pickCmd, demoCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
+	doctorCmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check that tmux, git and your agents are set up for nagare",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Colour when printing to a terminal, plain text when piped.
+			out := colorprofile.NewWriter(os.Stdout, os.Environ())
+			if doctor.Print(out, doctor.Run(doctor.DefaultEnv())) {
+				return fmt.Errorf("some checks failed")
+			}
+			return nil
+		},
+		SilenceUsage: true,
+	}
+
+	rootCmd.AddCommand(pickCmd, demoCmd, doctorCmd, hookStateCmd, setupCmd, notifsCmd, popupNotifCmd, newCmd, mcpCmd, toolCmd)
 
 	// Default to "pick" when no subcommand given
 	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {

@@ -2464,6 +2464,7 @@ func (m Model) welcome(width int) string {
 		mutedStyle().Render("From your shell:"),
 		row("nagare-go demo", "try nagare with simulated agents"),
 		row("nagare-go setup", "connect Claude Code, Codex, OpenCode, Gemini…"),
+		row("nagare-go doctor", "check that everything is connected"),
 	}
 	return lipgloss.NewStyle().Width(width).Padding(1, 2).Render(strings.Join(lines, "\n"))
 }

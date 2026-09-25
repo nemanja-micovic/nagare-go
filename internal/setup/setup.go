@@ -3,6 +3,7 @@ package setup
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nemke/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +49,7 @@ func Run() error {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 
-	dataDir := filepath.Join(home, ".local", "share", "nagare")
+	dataDir := paths.Data()
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("cannot create data directory: %w", err)
 	}
