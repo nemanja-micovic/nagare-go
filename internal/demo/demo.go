@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	nagaregit "github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/paths"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
@@ -152,8 +153,8 @@ func (e *Env) startProject(p project) error {
 	for i, a := range p.agents {
 		dir := root
 		if a.worktree != "" {
-			dir = filepath.Join(root, ".worktrees", a.worktree)
-			if err := git(root, "worktree", "add", "-q", "-b", a.worktree, dir); err != nil {
+			var err error
+			if dir, err = nagaregit.AddWorktree(root, a.worktree); err != nil {
 				return err
 			}
 		}

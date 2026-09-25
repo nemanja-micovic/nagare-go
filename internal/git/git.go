@@ -5,6 +5,7 @@ package git
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -124,7 +125,45 @@ func AddWorktree(repoRoot, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git worktree add %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
+	ExcludeLocally(repoRoot, "/"+worktreeDir+"/")
 	return path, nil
+}
+
+// ExcludeLocally adds pattern to the repository's .git/info/exclude unless it
+// is already there. Worktrees nagare creates live inside the repository, and
+// without this every one of them shows up in the main checkout's git status as
+// an untracked directory. info/exclude rather than .gitignore: it is local to
+// this clone, so nagare never edits a tracked file on the user's behalf.
+func ExcludeLocally(repoRoot, pattern string) error {
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		return err
+	}
+	common := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(repoRoot, common)
+	}
+	path := filepath.Join(common, "info", "exclude")
+	existing, _ := os.ReadFile(path)
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	prefix := ""
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		prefix = "\n"
+	}
+	_, err = fmt.Fprintf(f, "%s%s\n", prefix, pattern)
+	return err
 }
 
 // ClaudeWorktreePath returns where `claude -w <name>` places its worktree.

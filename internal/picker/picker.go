@@ -122,6 +122,7 @@ type Model struct {
 	leaveKey       string                          // returns from focus mode (picker.focus_leave_key)
 	newQueue       func() *tmux.Queue              // where focus mode's tmux commands go; faked in tests
 	filterGen      int                             // bumped whenever filtered is rebuilt
+	review         reviewState                     // the changes panel (review.go)
 	compactRows    bool                            // rows rendered for the narrow focus-mode sidebar
 	sidebarCache   *sidebarCache                   // focus mode's last sidebar render
 }
@@ -345,6 +346,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case focusTickMsg, focusSnapMsg, attachDoneMsg:
 		return m.updateFocus(msg)
 
+	case reviewFilesMsg, reviewDiffMsg, reviewEditDoneMsg:
+		return m.updateReview(msg)
+
 	case tea.PasteMsg:
 		switch {
 		case m.focus.on && !m.overlayOpen():
@@ -401,6 +405,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.activateSelected()
 
 	case mouseDismissMsg:
+		m.review.open = false
 		// Same semantics as Esc on each overlay: cancelling the theme picker
 		// restores the theme it was previewing over.
 		if m.showThemePick {
@@ -717,6 +722,8 @@ func (m Model) view() (string, hitTargets) {
 		overlay, dismissable = helpOverlayFor(m.width, m.height, keyLabel(m.leaveKeyOrDefault(), false)), true
 	case m.showThemePick:
 		overlay, dismissable = themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height), true
+	case m.review.open:
+		overlay, dismissable = m.renderReviewOverlay(), true
 	case m.promptMode:
 		// Not dismissable: a half-typed prompt should not be thrown away by a
 		// stray click, and neither should a pending destructive answer.
@@ -807,6 +814,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Prompt mode intercepts keys
 	if m.promptMode {
 		return m.handlePromptKey(msg)
+	}
+
+	// The review panel is a dialog: it has the keyboard until it closes.
+	if m.review.open {
+		return m.handleReviewKey(msg)
 	}
 
 	// Focus mode hands the keyboard to the agent, bar a few chords of its own.
@@ -1006,6 +1018,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.jumpToNextAttention()
 	case keyJumpTmux:
 		return m.jumpToTmux()
+	case keyReview:
+		if s, ok := m.selectedSession(); ok {
+			return m.openReview(s)
+		}
+		return m, nil
 	case keyEditConfig:
 		return m, m.openConfigEditor()
 	default:

@@ -25,6 +25,8 @@ func hintsFor(m Model) []hint {
 	switch {
 	case m.showHelp:
 		return []hint{{"F1 / Esc", "Close"}}
+	case m.review.open:
+		return []hint{{"↑/↓", "File"}, {"PgUp/PgDn", "Scroll"}, {"Enter", "Edit"}, {"Esc", "Close"}}
 	case m.showThemePick:
 		return []hint{{"↑/↓", "Preview"}, {"Enter", "Keep"}, {"Esc", "Cancel"}}
 	case m.confirmMode:
@@ -117,7 +119,7 @@ func focusHints(m Model) []hint {
 	if m.focus.n < maxTiles {
 		hints = append(hints, hint{"Alt+v", "Split"})
 	}
-	hints = append(hints, hint{"Alt ↑/↓", "Switch"})
+	hints = append(hints, hint{"Alt ↑/↓", "Switch"}, hint{"Alt+d", "Review"})
 	if m.focus.cur().shell {
 		hints = append(hints, hint{"Alt+s", "Agent"})
 	} else {
@@ -160,7 +162,7 @@ func helpBar(m Model, width int) string {
 	tail := []hint{{"F1", "More"}, {"Esc", "Quit"}}
 	switch {
 	case m.showHelp || m.showThemePick || m.confirmMode || m.promptMode ||
-		m.renameMode || m.worktreeMode:
+		m.renameMode || m.worktreeMode || m.review.open:
 		// A mode's own footer already names its exit; "More"/"Quit" would be
 		// wrong there, since F1 and Esc mean something else.
 		tail = nil
@@ -234,6 +236,7 @@ func helpColumns(leave string) ([]helpSection, []helpSection) {
 			{"Alt+←/→", "Move between tiles"},
 			{"Alt+x", "Close the active tile"},
 			{"Alt+s", "Shell in the agent's directory"},
+			{"Alt+d", "Review the agent's changes"},
 			{"F4", "Next agent waiting on you"},
 			{"Shift+PgUp", "Scroll back (PgDn: forward)"},
 			{"Alt+z", "Zoom: hide the sidebar"},
@@ -256,6 +259,7 @@ func helpColumns(leave string) ([]helpSection, []helpSection) {
 		{"Sessions", [][2]string{
 			{"Ctrl+n", "Create new session"},
 			{"Ctrl+r", "Quick prototype"},
+			{"Ctrl+d", "Review changes (diff)"},
 			{"F2", "Name selected task"},
 			{"F3", "New git worktree"},
 			{"Ctrl+f", "Toggle star"},

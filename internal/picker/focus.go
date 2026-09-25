@@ -734,6 +734,11 @@ func (m Model) handleFocusKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cycleTile(1)
 	case keyFocusShell:
 		return m.toggleShell()
+	case keyFocusReview:
+		if s, ok := m.focusedSession(); ok {
+			return m.openReview(s)
+		}
+		return m, nil
 	case keyFocusZoom:
 		m.focus.zoom = !m.focus.zoom
 		m.fitFocus(false)
