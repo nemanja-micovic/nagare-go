@@ -8,6 +8,8 @@ import "github.com/nemke/nagare-go/internal/tmux"
 func NewForTest() Model {
 	m := New()
 	m.testNoScan = true
+	// Nor may a test read or write the developer's saved layout.
+	m.restore, m.restoreEnabled = nil, false
 	// Focus mode must never reach a real tmux server from a test: it would
 	// resize, and type into, whatever pane on the developer's machine happened
 	// to match.

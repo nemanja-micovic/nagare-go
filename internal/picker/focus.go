@@ -340,13 +340,17 @@ func (m Model) addTile() (Model, tea.Cmd) {
 		m.statusNote = "every agent is already on screen"
 		return m, nil
 	}
-	s := m.filtered[next]
+	return m.addTileFor(m.filtered[next])
+}
+
+// addTileFor opens s in a new tile, which takes the keyboard.
+func (m Model) addTileFor(s models.Session) (Model, tea.Cmd) {
+	f := &m.focus
 	f.tiles[f.n] = paneView{}
 	f.active = f.n
 	f.n++
 	// Every tile's rectangle changes with the layout, so all of them refit.
-	m, cmd := m.showInTile(s, agentTarget(s), false)
-	return m, cmd
+	return m.showInTile(s, agentTarget(s), false)
 }
 
 // closeTile removes the active tile. Closing the last one leaves focus mode.
@@ -459,6 +463,7 @@ func (m *Model) releaseFocus() {
 // Called once the program has exited, so a window is never left pinned to
 // nagare's size.
 func (m Model) Close() {
+	m.saveLayout()
 	if m.focus.q == nil {
 		return
 	}

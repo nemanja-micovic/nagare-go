@@ -42,6 +42,8 @@ type PickerConfig struct {
 	// the one key focus mode keeps from the agent that has no alternative, so it
 	// is configurable for layouts where Ctrl+] is awkward to type.
 	FocusLeaveKey string `toml:"focus_leave_key"`
+	// RestoreLayout reopens the focus-mode tiles nagare was closed on.
+	RestoreLayout bool `toml:"restore_layout"`
 }
 
 // Enter actions.
@@ -96,6 +98,7 @@ func Default() NagareConfig {
 			Animations:          true,
 			EnterAction:         EnterFocus,
 			FocusLeaveKey:       "ctrl+]",
+			RestoreLayout:       true,
 		},
 		Appearance: AppearanceConfig{
 			Theme:     "tokyonight",
@@ -222,6 +225,9 @@ func mergePicker(defaults, parsed PickerConfig, rawVal interface{}) PickerConfig
 	}
 	if _, ok := m["enter_action"]; ok {
 		result.EnterAction = parsed.EnterAction
+	}
+	if _, ok := m["restore_layout"]; ok {
+		result.RestoreLayout = parsed.RestoreLayout
 	}
 	if v, ok := m["focus_leave_key"]; ok && v != "" {
 		result.FocusLeaveKey = parsed.FocusLeaveKey

@@ -14,6 +14,8 @@ Run Claude Code, Codex, OpenCode, Gemini CLI, Crush, pi and OhMyPi side by side,
 - **Watch several at once.** `Alt+v` splits the screen into up to four live agents. The one with the keyboard wears a gradient frame; the rest keep streaming and shout **needs you** the moment they block.
 - **Know who is waiting.** Agents report their state through hooks and plugins, not screen scraping, so nagare knows exactly who is working, idle or waiting for you. `F4` walks the queue of waiting agents.
 - **Review before you trust.** `Alt+d` shows what an agent changed: every touched file with line counts, and git's own diff. Enter opens the file in your editor.
+- **Hear about the ones you are not watching.** When an agent off the keyboard starts waiting or finishes, a toast says so in the corner of your screen.
+- **Pick up where you left off.** Quit while working in tiles and the next start reopens them.
 - **A shell one chord away.** `Alt+s` opens a shell in the agent's directory, for the `git status` and test runs that every session ends with.
 - **Worktrees built in.** `F3` starts a new agent in a fresh git worktree of the same repo, grouped under it, with the worktree kept out of your main checkout's `git status`.
 - **Agents that talk to each other.** A built-in MCP server lets your agents discover, message and wait on one another.
@@ -135,6 +137,7 @@ nagare-go mcp          # MCP server (stdio, used by agent CLIs)
 [picker]
 enter_action = "focus"       # "jump" switches to the session in tmux instead
 focus_leave_key = "ctrl+]"   # e.g. "ctrl+q" where Ctrl+] is awkward to type
+restore_layout = true        # reopen the tiles nagare was closed on
 mouse = true
 animations = true
 show_help_bar = true

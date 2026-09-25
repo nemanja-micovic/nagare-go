@@ -311,6 +311,23 @@ the keypress through `Update`, so the palette cannot drift from the keys.
 `TestFocusPaletteActionsNeverReachTheAgent` replays every focus-mode action and
 fails if any reaches the agent as a keystroke.
 
+### Toasts, layout restore, first run
+
+- **Toasts** (`toast.go`): in focus mode, the same two transitions that flash a
+  row (started waiting, finished) raise a toast for any agent without the
+  keyboard, drawn top-right with the compositor, above tiles and below dialogs.
+  Five seconds, at most three, pruned on the 10fps clock, which stays alive while
+  any are showing. None in the list: the flashing row is already where the eye is.
+- **Layout restore** (`layout.go`, `picker.restore_layout`): `Close` saves the
+  tiles to `layout.json` when quitting in focus mode and deletes it when quitting
+  from the list. The first scan reopens tiles whose agents are still listed,
+  matching by pane id then session key. Tests never touch it: `NewForTest`
+  disables both reading and writing.
+- **First run**: with no sessions the detail panel is a welcome that names
+  `Ctrl+n`, `Ctrl+r`, `Ctrl+k`, `nagare-go demo` and `nagare-go setup`, and an empty
+  search says what did not match — most people's first look at nagare was a
+  panel reading "No session selected".
+
 ### Demo mode
 
 `nagare-go demo` (`internal/demo`) is how people try nagare, and how the README GIF
