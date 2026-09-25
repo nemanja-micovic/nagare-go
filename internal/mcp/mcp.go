@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/nemke/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,8 +43,7 @@ type Message struct {
 
 // MessagesDir returns the base messages directory.
 func MessagesDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "nagare", "messages")
+	return filepath.Join(paths.Data(), "messages")
 }
 
 // sanitizeName replaces filesystem-unsafe characters in session names so they

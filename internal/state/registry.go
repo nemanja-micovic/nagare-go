@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"github.com/nemke/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,8 +27,7 @@ type Registry struct {
 
 // DefaultRegistryPath returns the default registry file path.
 func DefaultRegistryPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "nagare", "sessions.json")
+	return filepath.Join(paths.Data(), "sessions.json")
 }
 
 // NewRegistry loads or creates a registry at the given path.

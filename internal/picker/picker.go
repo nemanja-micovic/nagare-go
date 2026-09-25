@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/config"
+	"github.com/nemke/nagare-go/internal/demo"
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
@@ -121,6 +122,7 @@ type Model struct {
 	leaveKey       string                          // returns from focus mode (picker.focus_leave_key)
 	newQueue       func() *tmux.Queue              // where focus mode's tmux commands go; faked in tests
 	filterGen      int                             // bumped whenever filtered is rebuilt
+	compactRows    bool                            // rows rendered for the narrow focus-mode sidebar
 	sidebarCache   *sidebarCache                   // focus mode's last sidebar render
 }
 
@@ -158,6 +160,8 @@ func New() Model {
 		sidebarCache: &sidebarCache{},
 		newQueue:     tmux.NewQueue,
 		leaveKey:     cmp.Or(cfg.Picker.FocusLeaveKey, keyFocusLeave),
+		// The demo introduces itself; the note clears on the first keypress.
+		statusNote: os.Getenv(demo.NoteEnv),
 	}
 }
 
@@ -1591,6 +1595,7 @@ func (m Model) viewList(outerWidth, outerHeight int, sidebar bool) (string, map[
 		listHeight = 1
 	}
 
+	m.compactRows = sidebar
 	list, rowAt := m.renderListView(innerWidth, listHeight)
 
 	// Frame row of the list's first line: top border, top padding, then header.
@@ -1710,6 +1715,12 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		// The branch keeps the right-hand column; the compact agent badge is part
 		// of the left cluster so both remain visible on ordinary pane widths.
 		branch := branchFor(row.Label, s.Details.Worktree, s.Details.GitBranch)
+		// The sidebar is too narrow to afford a branch column: it would truncate
+		// the names, which are what the sidebar is for, and the focused agent's
+		// branch is already in the terminal's title.
+		if m.compactRows {
+			branch = ""
+		}
 
 		// Columns the row spends on anything that is not text: leading space,
 		// the dot, the space after it, the tree prefix, agent badge, star, and the
@@ -1789,7 +1800,11 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 	if row.Count == 1 {
 		noun = "session"
 	}
-	count := mutedStyle().Render(fmt.Sprintf("%d %s", row.Count, noun))
+	label := fmt.Sprintf("%d %s", row.Count, noun)
+	if m.compactRows {
+		label = fmt.Sprint(row.Count)
+	}
+	count := mutedStyle().Render(label)
 	fixed := 1 + 1 + lipgloss.Width(count) + rowGutter
 	maxName := width - fixed
 	if maxName < minNameWidth {

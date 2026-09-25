@@ -3,7 +3,6 @@ package picker
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"time"
@@ -527,7 +526,7 @@ func (m Model) jumpToTmux() (tea.Model, tea.Cmd) {
 	}
 	tmux.RunTmux("select-window", "-t", fmt.Sprintf("%s:%d", s.SessionName, s.WindowIndex))
 	tmux.RunTmux("select-pane", "-t", tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex))
-	c := exec.Command("tmux", "attach-session", "-t", s.SessionName)
+	c := tmux.Command("attach-session", "-t", s.SessionName)
 	return m, tea.ExecProcess(c, func(err error) tea.Msg { return attachDoneMsg{err: err} })
 }
 

@@ -1,7 +1,5 @@
 package tmux
 
-import "os/exec"
-
 // Queue runs tmux commands one at a time, in the order they were issued.
 //
 // Keystrokes forwarded to a pane have to arrive in the order they were typed.
@@ -21,7 +19,7 @@ type Runner func(args ...string) (string, error)
 
 // ExecRunner runs tmux for real.
 func ExecRunner(args ...string) (string, error) {
-	out, err := exec.Command("tmux", args...).Output()
+	out, err := Command(args...).Output()
 	return string(out), err
 }
 
