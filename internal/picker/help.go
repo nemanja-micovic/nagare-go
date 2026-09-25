@@ -25,6 +25,8 @@ func hintsFor(m Model) []hint {
 	switch {
 	case m.showHelp:
 		return []hint{{"F1 / Esc", "Close"}}
+	case m.palette.open:
+		return []hint{{"↑/↓", "Choose"}, {"Enter", "Run"}, {"Esc", "Close"}}
 	case m.review.open:
 		return []hint{{"↑/↓", "File"}, {"PgUp/PgDn", "Scroll"}, {"Enter", "Edit"}, {"Esc", "Close"}}
 	case m.showThemePick:
@@ -162,7 +164,7 @@ func helpBar(m Model, width int) string {
 	tail := []hint{{"F1", "More"}, {"Esc", "Quit"}}
 	switch {
 	case m.showHelp || m.showThemePick || m.confirmMode || m.promptMode ||
-		m.renameMode || m.worktreeMode || m.review.open:
+		m.renameMode || m.worktreeMode || m.review.open || m.palette.open:
 		// A mode's own footer already names its exit; "More"/"Quit" would be
 		// wrong there, since F1 and Esc mean something else.
 		tail = nil
@@ -246,6 +248,7 @@ func helpColumns(leave string) ([]helpSection, []helpSection) {
 			{"Tab", "Toggle list / grid view"},
 			{"Ctrl+t", "Pick a color theme"},
 			{"Ctrl+s", "Show saved sessions"},
+			{"Ctrl+k", "Command palette (Alt+k)"},
 			{"F1", "Toggle this screen"},
 		}},
 	}

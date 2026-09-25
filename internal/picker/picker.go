@@ -123,6 +123,7 @@ type Model struct {
 	newQueue       func() *tmux.Queue              // where focus mode's tmux commands go; faked in tests
 	filterGen      int                             // bumped whenever filtered is rebuilt
 	review         reviewState                     // the changes panel (review.go)
+	palette        paletteState                    // the command palette (palette.go)
 	compactRows    bool                            // rows rendered for the narrow focus-mode sidebar
 	sidebarCache   *sidebarCache                   // focus mode's last sidebar render
 }
@@ -351,6 +352,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		switch {
+		case m.palette.open:
+			var cmd tea.Cmd
+			m.palette.input, cmd = m.palette.input.Update(msg)
+			return m, cmd
 		case m.focus.on && !m.overlayOpen():
 			return m.pasteFocus(msg.Content)
 		case m.promptMode:
@@ -406,6 +411,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case mouseDismissMsg:
 		m.review.open = false
+		m.palette.open = false
 		// Same semantics as Esc on each overlay: cancelling the theme picker
 		// restores the theme it was previewing over.
 		if m.showThemePick {
@@ -724,6 +730,8 @@ func (m Model) view() (string, hitTargets) {
 		overlay, dismissable = themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height), true
 	case m.review.open:
 		overlay, dismissable = m.renderReviewOverlay(), true
+	case m.palette.open:
+		overlay, dismissable = m.renderPaletteOverlay(), true
 	case m.promptMode:
 		// Not dismissable: a half-typed prompt should not be thrown away by a
 		// stray click, and neither should a pending destructive answer.
@@ -816,7 +824,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePromptKey(msg)
 	}
 
-	// The review panel is a dialog: it has the keyboard until it closes.
+	// The palette and the review panel are dialogs: each has the keyboard
+	// until it closes.
+	if m.palette.open {
+		return m.handlePaletteKey(msg)
+	}
 	if m.review.open {
 		return m.handleReviewKey(msg)
 	}
@@ -1023,6 +1035,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.openReview(s)
 		}
 		return m, nil
+	case keyPalette:
+		return m.openPalette()
 	case keyEditConfig:
 		return m, m.openConfigEditor()
 	default:
