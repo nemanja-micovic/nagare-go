@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/nemke/nagare-go/internal/bin"
 	"github.com/nemke/nagare-go/internal/fsutil"
 	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemke/nagare-go/internal/state"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
 
@@ -37,10 +39,26 @@ import (
 // Push is one queued delivery: the rendered text a recipient sees, plus the
 // inbox coordinates needed to mark the stored message read.
 type Push struct {
-	ID          string `json:"id"`
-	FromSession string `json:"from_session"`
-	ToSession   string `json:"to_session"`
-	Text        string `json:"text"`
+	ID           string `json:"id"`
+	FromSession  string `json:"from_session"`
+	ToSession    string `json:"to_session"`
+	Text         string `json:"text"`
+	ExpectsReply bool   `json:"expects_reply,omitempty"` // whoever delivers it records the reply as owed
+}
+
+// pushPrefix starts every text nagare delivers, which is how a hook tells a
+// delivered message from a prompt the user typed.
+const pushPrefix = "[nagare]"
+
+// OwedIDs returns the ids of drained pushes that expect a reply.
+func OwedIDs(pushes []Push) []string {
+	var ids []string
+	for _, p := range pushes {
+		if p.ExpectsReply {
+			ids = append(ids, p.ID)
+		}
+	}
+	return ids
 }
 
 // listener is what an in-process listener writes to announce itself.
@@ -107,8 +125,8 @@ func Pending(paneID string) int {
 	return len(queuedNames(paneID))
 }
 
-// Drain claims every push queued for a pane and marks the stored messages
-// read, since the caller is about to put them in front of the agent. It is
+// Drain claims every push queued for a pane; the caller marks them read with
+// MarkRead once they are in front of the agent. It is
 // cheap when nothing is queued — one failed ReadDir — because hooks call it
 // after every tool use.
 func Drain(paneID string) []Push {
@@ -133,9 +151,18 @@ func Drain(paneID string) []Push {
 			continue
 		}
 		pushes = append(pushes, p)
-		markRead(p.ToSession, p.ID)
 	}
 	return pushes
+}
+
+// MarkRead records drained pushes as delivered into the agent's conversation.
+// It is the caller's to do, once the text has actually been handed over: a
+// watcher whose paste fails puts the pushes back, and they must still read as
+// queued.
+func MarkRead(pushes []Push) {
+	for _, p := range pushes {
+		markRead(p.ToSession, p.ID)
+	}
 }
 
 // JoinPushes renders drained pushes as one block of text.
@@ -150,12 +177,20 @@ func JoinPushes(pushes []Push) string {
 // markRead moves a delivered message out of the "new" state so check_messages
 // does not repeat what the agent was already shown.
 func markRead(toSession, id string) {
-	msg, err := ReadMessage(toSession, id)
-	if err != nil || (msg.Status != StatusPending && msg.Status != StatusDelivered) {
-		return
-	}
-	msg.Status = StatusRead
-	WriteMessage(msg)
+	setStatus(toSession, id, StatusRead)
+}
+
+// setStatus advances a message that has not been read yet. A message already
+// read or answered is left alone, so a late delivery report cannot move it
+// backwards.
+func setStatus(toSession, id, status string) {
+	UpdateMessage(toSession, id, func(m *Message) bool {
+		if statusRank(status) <= statusRank(m.Status) {
+			return false
+		}
+		m.Status = status
+		return true
+	})
 }
 
 // ListenerAlive reports whether an in-process listener owns the pane.
@@ -182,24 +217,93 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// Seams for tests: delivery must be exercisable without tmux or a detached
-// process.
+// Seams for tests: delivery must be exercisable without tmux, a detached
+// process, or a live Claude Code session.
 var (
 	pasteToPane  = tmuxPaste
 	spawnWatcher = startWatcher
+	postToInbox  = udsPost
 )
+
+// claudeInbox returns the cross-session inbox socket of a Claude Code target,
+// or "" when the message should go another way.
+//
+// Claude Code (2.1.224+) gives every session an inbox: a message posted there
+// starts a turn when the session is idle and is read between tool calls when
+// it is busy. That is everything the paste and the hooks approximate, without
+// typing into a terminal the user may be typing in. The socket is exported
+// only to hooks, so hook-state records it in the pane's state file.
+//
+// A session that bypasses permission prompts holds a message from an
+// unverified sender for the user's approval — and nagare cannot prove it is
+// the session's own child — so such sessions keep the paste and hook path,
+// which is never held.
+func claudeInbox(target models.Session) string {
+	if target.AgentType != models.AgentClaude || target.PaneID == "" {
+		return ""
+	}
+	st, ok := state.LoadStatesByPaneID(state.DefaultStatesDir())[target.PaneID]
+	if !ok || st.MessagingSocket == "" || st.PermissionMode == "bypassPermissions" {
+		return ""
+	}
+	return strings.TrimPrefix(st.MessagingSocket, "uds:")
+}
+
+// udsPost writes one message to a Claude Code inbox socket, in the form its
+// reader accepts: a line of JSON, {"type":"user","message":{"content":...}}.
+// The connection is opened only once the message is ready, since Claude Code
+// closes one that sends no complete line within 30s.
+func udsPost(sock, text string) error {
+	conn, err := net.DialTimeout("unix", sock, 500*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	line, err := json.Marshal(map[string]any{
+		"type":     "user",
+		"from":     "nagare",
+		"priority": "next",
+		"message":  map[string]string{"content": text},
+	})
+	if err != nil {
+		return err
+	}
+	conn.SetWriteDeadline(time.Now().Add(time.Second))
+	_, err = conn.Write(append(line, '\n'))
+	return err
+}
 
 // deliver routes a message to its recipient and reports what happened, in
 // words the sending agent can act on. The message must already be stored.
 func deliver(msg Message, target models.Session) (delivered bool, how string) {
-	p := Push{ID: msg.ID, FromSession: msg.FromSession, ToSession: msg.ToSession, Text: renderPush(msg)}
+	p := Push{
+		ID: msg.ID, FromSession: msg.FromSession, ToSession: msg.ToSession,
+		Text: renderPush(msg, AutoReplies(target.AgentType)), ExpectsReply: msg.ExpectsReply,
+	}
+	// Recorded before delivery: an agent can finish a short turn before the
+	// sender's next line of code runs.
+	owe := func() {
+		if msg.ExpectsReply {
+			Owe(target.PaneID, msg.ID)
+		}
+	}
 
+	if sock := claudeInbox(target); sock != "" {
+		owe()
+		if err := postToInbox(sock, p.Text); err == nil {
+			setStatus(msg.ToSession, msg.ID, StatusDelivered)
+			return true, "delivered into their conversation"
+		}
+	}
 	if ListenerAlive(target.PaneID) {
+		owe()
 		if err := Enqueue(target.PaneID, p); err == nil {
+			setStatus(msg.ToSession, msg.ID, StatusDelivered)
 			return true, "delivered into their conversation"
 		}
 	}
 	if target.Status == models.StatusIdle && target.PaneID != "" {
+		owe()
 		if err := pasteToPane(target.PaneID, p.Text); err == nil {
 			markRead(msg.ToSession, msg.ID)
 			return true, "delivered into their conversation"
@@ -215,18 +319,24 @@ func deliver(msg Message, target models.Session) (delivered bool, how string) {
 
 // renderPush is the text a recipient sees. It carries everything needed to
 // answer, so the recipient can reply in the same turn it reads the message.
-func renderPush(m Message) string {
+//
+// auto says the recipient's final message is sent back as its reply, so it
+// can simply answer; otherwise it is pointed at the reply tool.
+func renderPush(m Message, auto bool) string {
 	var b strings.Builder
 	if m.InReplyTo != "" {
-		fmt.Fprintf(&b, "[nagare] Reply from %s to your message %s:\n\n", m.FromSession, m.InReplyTo)
+		fmt.Fprintf(&b, "%s Reply from %s to your message %s:\n\n", pushPrefix, m.FromSession, m.InReplyTo)
 	} else {
-		fmt.Fprintf(&b, "[nagare] Message from %s:\n\n", m.FromSession)
+		fmt.Fprintf(&b, "%s Message from %s:\n\n", pushPrefix, m.FromSession)
 	}
 	b.WriteString(strings.TrimSpace(m.Content))
 	b.WriteString("\n\n")
-	if m.ExpectsReply {
+	switch {
+	case m.ExpectsReply && auto:
+		fmt.Fprintf(&b, "(%s is waiting for your answer. Just answer: the final message of this turn is sent back to them. message_id=%q)", m.FromSession, m.ID)
+	case m.ExpectsReply:
 		fmt.Fprintf(&b, "(%s is waiting for your answer. Answer with the nagare reply tool: message_id=%q.)", m.FromSession, m.ID)
-	} else {
+	default:
 		fmt.Fprintf(&b, "(No reply needed. To answer, use the nagare reply tool: message_id=%q.)", m.ID)
 	}
 	return b.String()
@@ -304,11 +414,14 @@ func WatchPane(paneID string) {
 			continue
 		}
 		if pushes := Drain(paneID); len(pushes) > 0 {
+			Owe(paneID, OwedIDs(pushes)...)
 			if err := pasteToPane(paneID, JoinPushes(pushes)); err != nil {
-				// Put them back; check_messages still finds the stored copies.
+				// Put them back, still unread.
 				for _, p := range pushes {
 					Enqueue(paneID, p)
 				}
+			} else {
+				MarkRead(pushes)
 			}
 		}
 		return

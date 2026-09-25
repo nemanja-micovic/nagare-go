@@ -16,7 +16,8 @@ Go rewrite of [nagare](https://github.com/nmicovic/nagare) — single binary, 3m
 - **Notifications** — toast, bell, OS notifications, popup when agents need attention
 - **Session Creation** — create new tmux sessions with agents (Ctrl+n, Ctrl+r, CLI)
 - **Inline Prompting** — send prompts to agents without leaving the picker (Ctrl+l, Ctrl+g)
-- **Inter-Agent Messaging** — agents message each other in one tool call. Messages go straight into the recipient's conversation, even mid-turn while it is busy, and replies come back the same way, with no polling and no inbox checks (pi has no MCP client, so it gets the same tools through a CLI bridge; OhMyPi uses native MCP)
+- **Inter-Agent Messaging** — agents message each other, one agent or several (`all`), in one tool call. Messages go straight into the recipient's conversation, even mid-turn while it is busy — through Claude Code's native inbox where available — and the recipient answers simply by finishing its turn: its final message is sent back automatically. No polling and no inbox checks (pi has no MCP client, so it gets the same tools through a CLI bridge; OhMyPi uses native MCP)
+- **Mailbox** — press F5 in the picker to see every message between agents: who sent what to whom, whether it was delivered, read or answered, and where any stuck message got to. Bodies render as markdown, and there are filter, search, sort and cleanup of old mail
 - **6 Themes** — tokyonight, catppuccin, dracula, gruvbox, monokai, nord
 - **3ms Startup** — compiled Go binary, no runtime dependencies
 

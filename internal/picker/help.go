@@ -21,6 +21,9 @@ type hint struct{ key, label string }
 // changes with context is both shorter and truthful, and the full set stays one
 // F1 away — the progressive-disclosure convention zellij uses for its modes.
 func hintsFor(m Model) []hint {
+	if m.mail != nil {
+		return mailHints(m.mail)
+	}
 	// An open overlay or an input mode owns the keyboard, so it owns the footer.
 	switch {
 	case m.showHelp:
@@ -87,7 +90,7 @@ func hintsFor(m Model) []hint {
 	if ok {
 		hints = append(hints, hint{"F3", "Worktree"})
 	}
-	hints = append(hints, hint{"^n", "New"}, hint{"^f", "Star"}, hint{"^o", "Sort"})
+	hints = append(hints, hint{"^n", "New"}, hint{"F5", "Mailbox"}, hint{"^f", "Star"}, hint{"^o", "Sort"})
 
 	return hints
 }
@@ -112,6 +115,14 @@ func helpBar(m Model, width int) string {
 		// A mode's own footer already names its exit; "More"/"Quit" would be
 		// wrong there, since F1 and Esc mean something else.
 		tail = nil
+	}
+	if m.mail != nil {
+		// Esc leaves the mailbox rather than quitting, and the way back is
+		// reserved space like any exit. The reader and dialogs name their own.
+		tail = nil
+		if m.mail.confirm == nil && !m.mail.reader {
+			tail = []hint{{"Esc", "Back"}}
+		}
 	}
 
 	var tailParts []string
@@ -204,6 +215,12 @@ func helpColumns() ([]helpSection, []helpSection) {
 			{"Ctrl+w", "Unload agent (kill pane)"},
 			{"Ctrl+x", "Kill window"},
 			{"", "Offers worktree removal"},
+		}},
+		{"Mailbox", [][2]string{
+			{"F5", "Messages between agents"},
+			{"←/→ Tab", "Filter · conversations"},
+			{"Ctrl+x", "Delete a message"},
+			{"Ctrl+d", "Clean up old messages"},
 		}},
 		{"Config", [][2]string{
 			{"Ctrl+e", "Edit config file"},

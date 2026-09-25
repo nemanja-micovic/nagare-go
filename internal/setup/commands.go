@@ -29,7 +29,7 @@ Call list_agents() to show all sessions with their name, agent type, status (idl
 	},
 	"nagare-send": {
 		description: "Send a message to another agent session (fire-and-forget)",
-		prompt: `Send a message to another agent session with nagare's send_message tool. Call it right away — do not call list_agents first. The target can be a session name, a repo or worktree name, or an agent type such as "codex" when that is unique; if it does not match, the error lists the agents.
+		prompt: `Send a message to another agent session with nagare's send_message tool. Call it right away — do not call list_agents first. If the message asks something, set expects_reply=true: the answer comes back into this conversation automatically when they finish. The target can be a session name, a repo or worktree name, or an agent type such as "codex" when that is unique; if it does not match, the error lists the agents.
 
 The message is delivered straight into their conversation, even if they are busy. Their reply arrives in your conversation automatically; do not poll or call check_messages.
 
@@ -138,18 +138,21 @@ description: Communicate with other AI coding-agent sessions through Nagare. Use
 
 Use the Nagare MCP tools directly:
 
-- send_message(target, message) delivers straight into the other agent's
-  conversation, even while it is busy. Its reply arrives in yours by itself.
+- send_message(target, message, expects_reply) delivers straight into the other
+  agent's conversation, even while it is busy. With expects_reply=true their
+  answer comes back into yours by itself when they finish.
 - send_message_and_wait(target, message, timeout) blocks until the reply comes.
-- reply(message_id, content) answers a message you received.
+- reply(message_id, content) answers mid-turn. Usually unnecessary: when a
+  message says your final message is sent back, just answer in it.
 - list_agents() lists sessions with their status and project path.
 - check_messages() reads the inbox; a fallback, rarely needed.
 
 Call send_message right away; do not call list_agents() first. The target can
 be a session name, repo, worktree, or agent type ("claude", "pi") when unique,
-and an unknown name returns the list of agents. Messages from other agents
-arrive in your conversation starting with "[nagare]"; answer them with reply()
-using the message_id they show. Do not poll for replies.
+several separated by commas, or "all"; an unknown name returns the list of
+agents. Messages from other agents arrive in your conversation starting with
+"[nagare]". When one asks for an answer, just answer: the final message of your
+turn is sent back. Do not poll for replies.
 `
 	path := filepath.Join(dir, "SKILL.md")
 	if err := os.WriteFile(path, []byte(skill), 0644); err != nil {
@@ -192,7 +195,8 @@ your conversation by itself, starting with "[nagare]".
 Call send_message_and_wait(target, message, timeout). The target may be busy.
 
 ### Answer a message
-Messages to you arrive starting with "[nagare]". Answer with reply(message_id, content).
+Messages to you arrive starting with "[nagare]". When one asks for an answer, just
+answer: your final message is sent back. reply(message_id, content) answers mid-turn.
 
 ### Check inbox
 Call check_messages() — reply to pending messages with reply(message_id, content).

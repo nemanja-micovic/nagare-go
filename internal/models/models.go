@@ -74,6 +74,8 @@ type SessionState struct {
 	NotificationType string `json:"notification_type,omitempty"`
 	LastMessage      string `json:"last_message,omitempty"`
 	Timestamp        string `json:"timestamp"`
+	MessagingSocket  string `json:"messaging_socket,omitempty"` // Claude Code's cross-session inbox
+	PermissionMode   string `json:"permission_mode,omitempty"`
 }
 
 // StatusColor returns the hex color for a status (tokyonight palette).

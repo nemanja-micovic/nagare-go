@@ -41,7 +41,7 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/state` — state files + session registry
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
-- `internal/picker` — Bubble Tea TUI (list/grid views, overlays, keybindings, mouse)
+- `internal/picker` — Bubble Tea TUI (list/grid views, overlays, keybindings, mouse, mailbox)
 - `internal/notifs` — notification center TUI
 - `internal/popup` — popup notification TUI
 - `internal/session` — session creation + path resolution
@@ -131,6 +131,11 @@ per-agent elsewhere.
 | OpenCode | plugin `~/.config/opencode/plugins/nagare.js` | MCP (`~/.config/opencode/opencode.json`) |
 | Crush | none | MCP (`~/.config/crush/crush.json`) |
 | pi | extension `~/.pi/agent/extensions/nagare.ts` | `nagare-go tool` bridge (pi has no MCP) |
+| OhMyPi | extension `~/.omp/agent/extensions/nagare.ts` | MCP (`~/.omp/agent/mcp.json`) |
+
+OhMyPi is a pi fork whose extension API matches pi's for everything nagare uses, so
+the message listener and final-text extraction are one shared snippet
+(`setup.piFamilyShared`) spliced into both extensions.
 
 pi has no MCP client by design, so its extension registers the five nagare tools and
 shells out to `nagare-go tool <name> <json>`, which calls the same handlers the MCP
@@ -156,11 +161,60 @@ recipient's context in one step, and so does the answer:
   wrong guess costs one retry, not a `list_agents` call. The MCP server `instructions`
   carry a startup roster and tell the agent not to call `list_agents` first.
 - **The content is delivered, not a pointer to it.** `mcp.deliver` picks a path per
-  message. If a live in-process listener owns the pane (the pi extension, the OpenCode
-  plugin), it goes to `push/<pane>/` and the listener injects it natively. If the pane
-  is idle, it is bracketed-pasted in as the next prompt. Otherwise it is queued in
-  `push/<pane>/`. A pane showing a permission prompt is never typed into, because the
-  keystrokes would answer the prompt.
+  message, in this order:
+  1. **Claude Code:** its native cross-session inbox (2.1.224+), when one is recorded
+     and the session is not bypassing permissions. See below.
+  2. **pi, OhMyPi, OpenCode:** a live in-process listener (the pi and OhMyPi
+     extensions, the OpenCode plugin) owns the pane, so the message goes to
+     `push/<pane>/` and the listener injects it natively.
+  3. **Any agent, idle:** it is bracketed-pasted in as the next prompt.
+  4. **Otherwise:** it is queued in `push/<pane>/`.
+
+  A pane showing a permission prompt is never typed into, because the keystrokes
+  would answer the prompt.
+- **Claude Code's inbox socket.** Every Claude Code session binds a Unix socket that
+  takes one JSON line, `{"type":"user","message":{"content":…},"priority":"next"}`.
+  An idle session starts a turn with it; a busy one reads it between tool calls. That
+  is everything the paste and the hooks approximate, without typing into a terminal
+  the user may be typing in. The path is exported only to hooks
+  (`CLAUDE_CODE_MESSAGING_SOCKET`), so `hook-state` records it in the pane's state
+  file, along with `permission_mode`, keeping the previous value when an event omits
+  them. The line format was read from Claude Code's own reader and is pinned by
+  `TestUDSPostWireFormat`; getting it wrong loses messages without an error.
+
+  A session that bypasses permission prompts *holds* a message from an unverified
+  sender for manual approval. On Linux only a real child process of that session
+  counts as verified; the token does not. So bypass-mode sessions keep the paste and
+  hook path, which is never held. A dead or refused socket falls through to the
+  other paths.
+- **Automatic replies.** Answering with `reply()` costs the recipient an extra model
+  step. So a message that expects an answer is recorded as *owed* by the pane it was
+  delivered to (`mcp.Owe`), and when that pane's turn ends, its final message is sent
+  back as the reply (`mcp.SettleOwed`). `hook-state` settles whenever a turn ends,
+  reported as `idle` with a `last_assistant_message`:
+  - **Claude Code and Codex:** the Stop hook carries it.
+  - **pi:** the extension takes it from `agent_end` and reports it on
+    `agent_settled`.
+  - **OhMyPi:** the extension reports it on `agent_end`. An `agent_end` with
+    `willContinue` set comes before an automatic retry, so it is not reported: it
+    would make the pane look idle and send a reply mid-run.
+  - **OpenCode:** the plugin fetches it with `client.session.messages`, only when
+    something is owed.
+
+  Settling happens before new messages are drained, since those start a new debt. An
+  explicit `reply()` wins. A prompt the user types cancels the debt (`ForgetOwed`),
+  because the next answer is for the user: a prompt that does not contain nagare's
+  marker counts as typed. Debts expire after `owedTTL`. Only agents in
+  `autoReplyAgents` are told they can "just answer"; the rest are pointed at the
+  reply tool.
+- **Questions need not block.** `send_message` with `expects_reply` asks without
+  waiting: the answer comes back automatically when the recipient finishes, and the
+  mailbox tracks it from needs reply to answered. A message without it is a note,
+  whose recipient's final message is *not* sent back. Otherwise every "Noted." would
+  start a turn in the sender.
+- **One call reaches several agents.** `target` takes a comma-separated list, or
+  `all`. An identical message to the same agent within `duplicateWindow` is dropped,
+  which stops resends and loops.
 - **Busy agents take messages mid-turn.** `hook-state` drains `push/$TMUX_PANE` on
   `PostToolUse` and `UserPromptSubmit`, returning it as `additionalContext`. On `Stop` it
   returns `{"decision":"block","reason":…}`, which both Claude Code and Codex continue
@@ -172,12 +226,37 @@ recipient's context in one step, and so does the answer:
   TUI prompt is the fallback.
 - **Fallback.** A detached `nagare-go deliver-watch <pane>` pastes whatever is still
   queued once the pane has been idle for two checks. This covers agents without such
-  hooks (Gemini, OhMyPi, Crush) and status that went stale. It runs at most once per
+  hooks (Gemini, Crush) and status that went stale. It runs at most once per
   pane (pid lock) and exits when the queue is empty.
 - **Replies are pushed back** as a new message carrying `in_reply_to`, which can itself
   be replied to, so two agents can hold a conversation without either polling. A sender
   blocked in `send_message_and_wait` leaves a `msg_<id>.wait` marker. The answer is
   then collected by the waiter, polling every 100ms, instead of being pushed.
+
+**Status only moves forward, under a lock.** Every change to a stored message after
+it is created goes through `mcp.UpdateMessage`, which holds an flock on the inbox.
+Status moves pending → delivered → read → completed, never back, and a response is
+never dropped, whatever the caller does. Deliveries, `check_messages`, `reply()` and
+automatic replies run in different processes. The plain read-modify-write they used
+to do let a delivery report save over a reply written a moment earlier, so an
+answered message showed as unanswered with its answer gone. `answer` completes a
+message only once, so an explicit reply racing the automatic one yields one answer.
+
+A drained push is marked read by whoever *delivered* it (`MarkRead`), not by
+`Drain`. A watcher whose paste fails puts the push back, and it must still read as
+queued. Every path that hands a question to an agent also records it as owed; the
+watcher once did not, which left answered questions showing "needs reply" forever.
+
+`internal/mcp/lifecycle_test.go` follows a message down each path: idle paste, hook
+drain, watcher, failed paste, listener, Claude inbox, `check_messages`, user
+interruption, wait, and a late delivery report. At every step it asserts the state
+the mailbox will show. `TestConcurrentUpdatesNeverLoseTheAnswer` races delivery
+reports, an explicit reply and the automatic reply on one message. Each of these
+tests fails when the bug it guards against is put back.
+
+`fsutil.AtomicWrite` writes through a unique temp file. A fixed `<path>.tmp` let
+two writers of one file share the temp file, and the first rename put a mix of both
+into place.
 
 A push is claimed by `rename`, so exactly one consumer delivers it however many race.
 Replies look messages up by id across all inboxes (`FindMessage`), because a display
@@ -208,7 +287,7 @@ raises `tool_timeout_sec`, because Codex's 60s default would cut waits short.
 | Ctrl+g | Editor prompt ($EDITOR) |
 | Ctrl+e | Edit config |
 | Ctrl+t | Theme picker |
-| Ctrl+b | Mailbox viewer |
+| F5 | Mailbox: every message between agents |
 | F4 | Jump to the next session waiting on you |
 | F1 | Help overlay |
 
@@ -227,6 +306,53 @@ dialogs (worktree removal, inline prompt) ignore clicks and want a deliberate an
 The footer shows only the keys valid for the current mode and selection, trimmed to
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
+
+### Mailbox (F5)
+
+A full-screen view over every inter-agent message (`internal/picker/mailbox.go` for
+state and keys, `mailview.go` for rendering, `markdown.go` for bodies). It exists to
+answer what the agents' own conversations cannot: did a message arrive, and if not,
+where it is stuck; what was said; and how much old mail has piled up. It is F5, not
+Ctrl+b: Ctrl+b is tmux's default prefix, and the picker runs inside tmux.
+
+Each message's state is *derived*, by `mcp.Envelope.State`, from the stored status
+plus facts the file does not hold. `mcp.AllMessages` supplies those: whether a push
+copy is still queued, and whether the sender's wait marker is live. The derivation
+lives in `mcp`, not the picker, so the lifecycle tests can drive a real delivery
+path and assert exactly what the mailbox will show.
+
+- **queued**: pending with a queued copy, or less than `LostAfter` old. A send stores
+  the message a moment before it delivers it, so a fresh pending message is in transit.
+- **lost**: pending, no queued copy, and older than `LostAfter`.
+- **needs reply**: delivered or read, and the sender asked for an answer.
+- **delivered**: delivered or read, and no answer was asked for.
+- **answered**: has a response.
+
+A recipient that no longer runs under its name is flagged as *gone*. `isLive`
+accepts the `session` half of a `session/pane` name, because display names drift
+when a second pane joins. The **Problems** tab collects lost messages, open messages
+to a gone recipient, and anything queued past `staleQueue`. The detail pane's
+`explain` line says in words where the message got to.
+
+Messages are grouped into conversations by the unordered pair of agents, so a
+message and its reply share one. Messages run oldest first inside a conversation,
+as in a chat, and the sort mode orders the conversations. Tab switches to a flat
+timeline. The search is a substring match, not fuzzy: over prose, fuzzy matching
+finds nonsense. Each agent's name takes a color by its position in the sorted
+list of names, not by hash, because a hash gave two agents the same blue. Status
+colors are kept out of that palette.
+
+Bodies are markdown, rendered by glamour with a style built from the theme tokens
+(`markdownStyle`) and cached per message, width and theme. The picker redraws up
+to 10 times a second, and one render costs more than a whole frame. The output is
+hard-cut to the panel width, since glamour's wrap is a target, not a guarantee.
+
+Deletion always asks first. `mcp.DeleteMessage` also removes the wait marker and
+any queued push copy, so a deleted message can never be delivered afterwards.
+Cleanup (Ctrl+d) deletes only *finished* messages older than the chosen age.
+Queued and unanswered ones are kept, so no conversation still in progress is cut.
+The mailbox reloads on every picker scan and keeps its selection and scroll
+position.
 
 ### Layout: measure, never assume
 

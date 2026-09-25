@@ -71,21 +71,34 @@ func roster(sessions []models.Session, mySession string) string {
 
 // SendMessageInput is the input for send_message tool.
 type SendMessageInput struct {
-	Target  string `json:"target" jsonschema:"who to message: a session name, or a repo, worktree, or agent type (claude, codex, pi, opencode...) if that is unique"`
+	Target  string `json:"target" jsonschema:"who to message: a session name, or a repo, worktree, or agent type (claude, codex, pi, opencode...) if that is unique; several separated by commas, or \"all\""`
 	Message string `json:"message" jsonschema:"message to send"`
+	// ExpectsReply turns a note into a question without blocking the sender.
+	ExpectsReply bool `json:"expects_reply,omitempty" jsonschema:"true when you are asking something: their answer comes back to you automatically when they finish their turn, and you can keep working meanwhile"`
 }
 
 // SendMessageHandler stores a message and pushes it into the target's
 // conversation. The target may be busy: the message is then queued and
 // delivered at its next tool call or turn end.
 func SendMessageHandler(mySession string, input SendMessageInput) string {
-	msg, target, errText := prepare(mySession, input.Target, input.Message, false)
+	if strings.TrimSpace(input.Message) == "" {
+		return "Error: message is empty."
+	}
+	targets, errText := resolveTargets(mySession, input.Target)
 	if errText != "" {
 		return errText
 	}
-	_, how := deliver(msg, target)
-	return fmt.Sprintf("Sent to %s (message %s): %s. Their reply, if any, will arrive in your conversation automatically.",
-		target.Name, msg.ID, how)
+	var lines []string
+	for _, target := range targets {
+		msg, errText := store(mySession, target, input.Message, input.ExpectsReply)
+		if errText != "" {
+			lines = append(lines, errText)
+			continue
+		}
+		_, how := deliver(msg, target)
+		lines = append(lines, fmt.Sprintf("Sent to %s (message %s): %s.", target.Name, msg.ID, how))
+	}
+	return strings.Join(lines, "\n") + "\nReplies, if any, arrive in your conversation automatically."
 }
 
 // SendMessageAndWaitInput is the input for send_message_and_wait tool.
@@ -153,41 +166,96 @@ func SendMessageAndWaitHandler(ctx context.Context, mySession string, input Send
 	}
 }
 
-// prepare resolves the target and stores the message. On failure it returns
-// the text to hand back to the calling agent — including the roster when the
-// target was not found, so the agent can retry without calling list_agents.
+// prepare resolves a single target and stores the message. On failure it
+// returns the text to hand back to the calling agent.
 func prepare(mySession, target, content string, expectsReply bool) (Message, models.Session, string) {
 	if strings.TrimSpace(content) == "" {
 		return Message{}, models.Session{}, "Error: message is empty."
 	}
+	targets, errText := resolveTargets(mySession, target)
+	if errText != "" {
+		return Message{}, models.Session{}, errText
+	}
+	if len(targets) != 1 {
+		return Message{}, models.Session{}, "Error: waiting for a reply works with one target at a time; use send_message to reach several."
+	}
+	msg, errText := store(mySession, targets[0], content, expectsReply)
+	return msg, targets[0], errText
+}
+
+// broadcastTargets are the target names that mean every other running agent.
+var broadcastTargets = map[string]bool{"all": true, "everyone": true, "*": true}
+
+// resolveTargets turns a target string into sessions: one name, several
+// separated by commas, or "all". A miss returns the roster, so the agent can
+// retry without calling list_agents.
+func resolveTargets(mySession, target string) ([]models.Session, string) {
 	sessions := scan()
 	var others []models.Session
 	for _, s := range sessions {
-		if s.Name != mySession {
+		if s.Name != mySession && s.Status != models.StatusDead && s.Status != models.StatusSaved {
 			others = append(others, s)
 		}
 	}
-	session, err := resolveSession(target, others)
-	if err != nil {
-		return Message{}, models.Session{}, fmt.Sprintf("Error: %v\nAgents you can message:\n%s", err, roster(sessions, mySession))
+	if broadcastTargets[strings.ToLower(strings.TrimSpace(target))] {
+		if len(others) == 0 {
+			return nil, "Error: no other agents are running."
+		}
+		return others, ""
 	}
-	if session.Status == models.StatusDead {
-		return Message{}, models.Session{}, fmt.Sprintf("Error: %s has exited.", session.Name)
+
+	var out []models.Session
+	seen := map[string]bool{}
+	for _, name := range strings.Split(target, ",") {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		s, err := resolveSession(strings.TrimSpace(name), others)
+		if err != nil {
+			return nil, fmt.Sprintf("Error: %v\nAgents you can message:\n%s", err, roster(sessions, mySession))
+		}
+		if !seen[s.Name] {
+			seen[s.Name] = true
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil, "Error: no target given.\nAgents you can message:\n" + roster(sessions, mySession)
+	}
+	return out, ""
+}
+
+// duplicateWindow is how long an identical message to the same agent is
+// treated as a resend. Agents that lose track of whether a send went through
+// send it again; two agents stuck in a loop send the same thing over and over.
+// Either way the recipient should read it once.
+const duplicateWindow = 30 * time.Second
+
+// store writes a message for target, unless the same text went to the same
+// agent a moment ago.
+func store(mySession string, target models.Session, content string, expectsReply bool) (Message, string) {
+	now := time.Now()
+	inbox, _ := ListInbox(target.Name)
+	for _, m := range inbox {
+		sent, err := time.Parse(time.RFC3339, m.CreatedAt)
+		if err == nil && m.FromSession == mySession && m.Content == content && now.Sub(sent) < duplicateWindow {
+			return Message{}, fmt.Sprintf("Already sent to %s a moment ago (message %s); not sent again.", target.Name, m.ID)
+		}
 	}
 	msg := Message{
 		ID:           NewMessageID(),
 		FromSession:  mySession,
 		FromPane:     os.Getenv("TMUX_PANE"),
-		ToSession:    session.Name,
+		ToSession:    target.Name,
 		Content:      content,
 		ExpectsReply: expectsReply,
 		Status:       StatusPending,
-		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
+		CreatedAt:    now.UTC().Format(time.RFC3339Nano),
 	}
 	if err := WriteMessage(msg); err != nil {
-		return Message{}, models.Session{}, fmt.Sprintf("Error writing message: %v", err)
+		return Message{}, fmt.Sprintf("Error writing message: %v", err)
 	}
-	return msg, session, ""
+	return msg, ""
 }
 
 // CheckMessagesHandler returns pending incoming messages + completed outgoing responses.
@@ -218,9 +286,8 @@ func CheckMessagesHandler(mySession string) string {
 			parts = append(parts, fmt.Sprintf("From: %s (sent %s)\n%s\nMessage ID: %s\n%s",
 				m.FromSession, m.CreatedAt, actionNote, m.ID, m.Content))
 
-			// Mark as read
+			markRead(m.ToSession, m.ID)
 			unread[i].Status = StatusRead
-			WriteMessage(unread[i])
 		}
 	}
 
@@ -285,15 +352,38 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 	if err != nil {
 		return fmt.Sprintf("Error: message %s not found.", input.MessageID)
 	}
-	orig := &found
+	return answer(found, input.Content, mySession, os.Getenv("TMUX_PANE"), false)
+}
 
-	now := time.Now().UTC().Format(time.RFC3339)
-	orig.Status = StatusCompleted
-	orig.Response = &input.Content
-	orig.RespondedAt = &now
-	if err := WriteMessage(*orig); err != nil {
+// answer records content as the response to orig and gets it to the sender:
+// a sender blocked in send_message_and_wait collects it itself, anyone else
+// has it pushed into their conversation. me and myPane identify the replier;
+// auto marks a response taken from the replier's final message rather than
+// sent with the reply tool.
+func answer(orig Message, content, me, myPane string, auto bool) string {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// Answered under the lock, and only once: an explicit reply and the
+	// automatic one can race at the end of a turn, and the sender must get one
+	// answer, not two.
+	already := false
+	saved, err := UpdateMessage(orig.ToSession, orig.ID, func(m *Message) bool {
+		if m.Status == StatusCompleted {
+			already = true
+			return false
+		}
+		m.Status = StatusCompleted
+		m.Response = &content
+		m.RespondedAt = &now
+		m.AutoReply = auto
+		return true
+	})
+	if err != nil {
 		return fmt.Sprintf("Error saving reply: %v", err)
 	}
+	if already {
+		return fmt.Sprintf("Message %s was already answered; %s has that answer.", orig.ID, orig.FromSession)
+	}
+	orig = saved
 
 	// Written before this check, so a waiter that removes its marker after
 	// the check still finds the response on its final read.
@@ -301,16 +391,16 @@ func ReplyHandler(mySession string, input ReplyInput) string {
 		return fmt.Sprintf("Reply sent to %s.", orig.FromSession)
 	}
 
-	sender, ok := findSender(scan(), *orig)
+	sender, ok := findSender(scan(), orig)
 	if !ok {
 		return fmt.Sprintf("Reply saved for %s, who is no longer running; they will see it via check_messages.", orig.FromSession)
 	}
 	back := Message{
 		ID:          NewMessageID(),
-		FromSession: mySession,
-		FromPane:    os.Getenv("TMUX_PANE"),
+		FromSession: me,
+		FromPane:    myPane,
 		ToSession:   sender.Name,
-		Content:     input.Content,
+		Content:     content,
 		InReplyTo:   orig.ID,
 		Status:      StatusPending,
 		CreatedAt:   now,

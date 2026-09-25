@@ -305,6 +305,8 @@ func TestHelpOverlayCoversEveryBinding(t *testing.T) {
 		keyEditConfig:    "Ctrl+e",
 		keyToggleSaved:   "Ctrl+s",
 		keyNextAttention: "F4",
+		keyMailbox:       "F5",
+		keyMailCleanup:   "Ctrl+d",
 	}
 	for binding, shown := range want {
 		if !strings.Contains(text, shown) {

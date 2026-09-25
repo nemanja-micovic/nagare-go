@@ -181,8 +181,22 @@ func TestInstallPiExtension(t *testing.T) {
 	if !strings.Contains(content, "agent_settled") {
 		t.Error("extension does not subscribe to agent_settled")
 	}
-	if strings.Contains(content, `"agent_end"`) {
-		t.Error("extension subscribes to agent_end, which fires before pi has settled")
+	// agent_end is read for the run's final text, but must never report
+	// status: it fires before pi has settled.
+	start := strings.Index(content, "const statusEvents = [")
+	end := strings.Index(content[start:], "] as const") + start
+	if start < 0 || end < start {
+		t.Fatal("status event list not found")
+	}
+	if strings.Contains(content[start:end], `"agent_end"`) {
+		t.Error("extension reports status on agent_end, which fires before pi has settled")
+	}
+	// The final text rides on agent_settled, which is what sends it back as
+	// an automatic reply.
+	for _, want := range []string{"last_assistant_message", "lastAssistantText(e?.messages)", "extra.prompt = e.prompt"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("extension missing automatic-reply piece %q", want)
+		}
 	}
 }
 
@@ -241,6 +255,17 @@ func TestInstallOhMyPiExtension(t *testing.T) {
 	}
 	if strings.Contains(content, "agent_settled") {
 		t.Error("OhMyPi extension uses pi's unavailable agent_settled event")
+	}
+	// The pi treatment: a message listener and automatic replies, from the
+	// code shared with pi, and no retry mistaken for the end of a run.
+	for _, want := range []string{`listen(pi, () => ctxNow, "omp")`, `deliverAs: "steer"`, "function takePushes",
+		"last_assistant_message", "e?.willContinue", "extra.prompt = e.prompt"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("extension missing %q", want)
+		}
+	}
+	if strings.Contains(content, "__SHARED__") || strings.Contains(content, "%%") {
+		t.Error("template placeholders or format escapes left in the extension")
 	}
 }
 
@@ -319,7 +344,8 @@ func TestInstallOpenCodePlugin(t *testing.T) {
 		}
 	}
 	// The plugin is the pane's message listener.
-	for _, want := range []string{"promptAsync", `join(DATA, "push", PANE)`, "renameSync", `agent: "opencode"`} {
+	for _, want := range []string{"promptAsync", `join(DATA, "push", PANE)`, "renameSync", `agent: "opencode"`,
+		"client.session.messages", "last_assistant_message", `"chat.message"`} {
 		if !strings.Contains(content, want) {
 			t.Errorf("plugin missing message listener piece %q", want)
 		}
@@ -337,7 +363,7 @@ func TestPiExtensionListensForMessages(t *testing.T) {
 	}
 	content := string(data)
 	// Busy pi must get messages as steering, or they wait for the turn to end.
-	for _, want := range []string{"sendUserMessage", `deliverAs: "steer"`, "isIdle()", `join(DATA, "push", PANE)`, `agent: "pi"`} {
+	for _, want := range []string{"sendUserMessage", `deliverAs: "steer"`, "isIdle()", `join(DATA, "push", PANE)`, `listen(pi, () => ctxNow, "pi")`} {
 		if !strings.Contains(content, want) {
 			t.Errorf("extension missing %q", want)
 		}

@@ -24,6 +24,8 @@ type HookEvent struct {
 	Cwd                  string `json:"cwd"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 	NotificationType     string `json:"notification_type"`
+	Prompt               string `json:"prompt"`          // the prompt that started a turn, where reported
+	PermissionMode       string `json:"permission_mode"` // Claude Code's current permission mode
 }
 
 var needsInputTypes = map[string]bool{
@@ -74,7 +76,7 @@ func EventToState(event, notificationType string) string {
 		return "dead"
 
 	// OpenCode plugin
-	case "session.status", "tool.execute.before", "permission.replied":
+	case "session.status", "tool.execute.before", "permission.replied", "chat.message":
 		return "working"
 	case "permission.asked":
 		return "waiting_input"
@@ -152,13 +154,27 @@ func Handle() {
 
 	newState := EventToState(event.HookEventName, event.NotificationType)
 
+	paneID := os.Getenv("TMUX_PANE")
+
+	// A prompt the user typed makes the next answer the user's, so any reply
+	// this pane owed another agent is no longer its final message's to give.
+	if event.Prompt != "" && !mcp.IsNagarePrompt(event.Prompt) {
+		mcp.ForgetOwed(paneID)
+	}
+	// A finished turn's final message answers whatever the pane was asked.
+	// Settled before new messages are drained, since those start a new debt.
+	if newState == "idle" && event.LastAssistantMessage != "" {
+		mcp.SettleOwed(paneID, event.LastAssistantMessage)
+	}
+
 	// Messages queued for this pane ride out on the hook's own response. A
 	// Stop that delivers keeps the agent working, so it must not read as idle
 	// — or notify as a finished task.
-	paneID := os.Getenv("TMUX_PANE")
 	var delivery []byte
 	if DeliversMessages(event.HookEventName) && paneID != "" {
 		if pushes := mcp.Drain(paneID); len(pushes) > 0 {
+			mcp.Owe(paneID, mcp.OwedIDs(pushes)...)
+			mcp.MarkRead(pushes)
 			delivery = DeliveryOutput(event.HookEventName, mcp.JoinPushes(pushes))
 			if event.HookEventName == "Stop" {
 				newState = "working"
@@ -185,6 +201,20 @@ func Handle() {
 		NotificationType: event.NotificationType,
 		LastMessage:      event.LastAssistantMessage,
 		Timestamp:        now,
+		// Claude Code exports its inbox socket only to hooks and Bash, so the
+		// hook is where nagare learns it — and the permission mode decides
+		// whether a message sent there would be delivered or held.
+		MessagingSocket: os.Getenv("CLAUDE_CODE_MESSAGING_SOCKET"),
+		PermissionMode:  event.PermissionMode,
+	}
+	// Not every event carries these; one that omits them must not erase them.
+	if hasPrev {
+		if newSessionState.MessagingSocket == "" {
+			newSessionState.MessagingSocket = prevState.MessagingSocket
+		}
+		if newSessionState.PermissionMode == "" {
+			newSessionState.PermissionMode = prevState.PermissionMode
+		}
 	}
 	state.WriteState(statesDir, newSessionState)
 

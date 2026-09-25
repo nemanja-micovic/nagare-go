@@ -22,14 +22,14 @@ func newFakeWorld(t *testing.T, sessions []models.Session) *fakeWorld {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	w := &fakeWorld{pastes: map[string][]string{}}
-	oldScan, oldPaste, oldSpawn := scan, pasteToPane, spawnWatcher
+	oldScan, oldPaste, oldSpawn, oldPost := scan, pasteToPane, spawnWatcher, postToInbox
 	scan = func() []models.Session { return sessions }
 	pasteToPane = func(pane, text string) error {
 		w.pastes[pane] = append(w.pastes[pane], text)
 		return nil
 	}
 	spawnWatcher = func(pane string) { w.watchers = append(w.watchers, pane) }
-	t.Cleanup(func() { scan, pasteToPane, spawnWatcher = oldScan, oldPaste, oldSpawn })
+	t.Cleanup(func() { scan, pasteToPane, spawnWatcher, postToInbox = oldScan, oldPaste, oldSpawn, oldPost })
 	return w
 }
 
@@ -207,7 +207,7 @@ func TestSendAndWaitReturnsReplyPromptly(t *testing.T) {
 }
 
 func TestRenderPushAsksForReplyWhenExpected(t *testing.T) {
-	text := renderPush(Message{ID: "abc", FromSession: "api", Content: "q?", ExpectsReply: true})
+	text := renderPush(Message{ID: "abc", FromSession: "api", Content: "q?", ExpectsReply: true}, false)
 	if !strings.Contains(text, "waiting for your answer") || !strings.Contains(text, `message_id="abc"`) {
 		t.Errorf("render = %q", text)
 	}

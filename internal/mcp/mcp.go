@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/google/uuid"
 	"github.com/nemke/nagare-go/internal/fsutil"
@@ -40,6 +41,7 @@ type Message struct {
 	RespondedAt  *string `json:"responded_at"`          // nil until reply
 	FromPane     string  `json:"from_pane,omitempty"`   // sender's tmux pane, for pushing the reply back
 	InReplyTo    string  `json:"in_reply_to,omitempty"` // set on a reply pushed back to the original sender
+	AutoReply    bool    `json:"auto_reply,omitempty"`  // response taken from the recipient's final message
 }
 
 // MessagesDir returns the base messages directory.
@@ -82,6 +84,76 @@ func WriteMessage(msg Message) error {
 		return err
 	}
 	return fsutil.AtomicWrite(MessagePath(msg.ToSession, msg.ID), data, 0644)
+}
+
+// statusRank orders the statuses a message moves through. A message only ever
+// moves forward: a late delivery report must not turn an answered message
+// back into an unread one.
+func statusRank(status string) int {
+	switch status {
+	case StatusPending:
+		return 0
+	case StatusDelivered:
+		return 1
+	case StatusRead:
+		return 2
+	case StatusCompleted:
+		return 3
+	}
+	return -1
+}
+
+// UpdateMessage changes a stored message under its inbox's lock. fn edits the
+// message as it is on disk now and returns false to leave it untouched.
+//
+// Every change after creation goes through here. Deliveries, check_messages,
+// replies and automatic replies run in different processes and can touch one
+// message at the same moment; a plain read-modify-write let a delivery report
+// that read the file before a reply was written save over the reply, so an
+// answered message came back as merely delivered, its answer gone. The lock
+// closes that, and the forward-only rule is enforced here once, whatever fn
+// does: the status never moves back and a response is never dropped.
+func UpdateMessage(toSession, msgID string, fn func(*Message) bool) (Message, error) {
+	var out Message
+	err := withFileLock(filepath.Join(InboxDir(toSession), ".lock"), func() error {
+		cur, err := ReadMessage(toSession, msgID)
+		if err != nil {
+			return err
+		}
+		next := cur
+		if !fn(&next) {
+			out = cur
+			return nil
+		}
+		if statusRank(next.Status) < statusRank(cur.Status) {
+			next.Status = cur.Status
+		}
+		if cur.Response != nil && next.Response == nil {
+			next.Response, next.RespondedAt, next.AutoReply = cur.Response, cur.RespondedAt, cur.AutoReply
+		}
+		out = next
+		return WriteMessage(next)
+	})
+	return out, err
+}
+
+// withFileLock runs fn holding an exclusive flock on path, creating it if
+// needed. flock locks belong to the open file, so this excludes other
+// goroutines as well as other processes.
+func withFileLock(path string, fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
 }
 
 // ReadMessage reads a message from disk.

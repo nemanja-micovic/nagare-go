@@ -24,4 +24,8 @@ const (
 	keyEditConfig    = "ctrl+e"
 	keyToggleSaved   = "ctrl+s"
 	keyNextAttention = "f4"
+	// F5, not Ctrl+b: Ctrl+b is tmux's default prefix, and the picker runs
+	// inside tmux, so the key would never reach it.
+	keyMailbox     = "f5"
+	keyMailCleanup = "ctrl+d" // mailbox only: delete old messages
 )

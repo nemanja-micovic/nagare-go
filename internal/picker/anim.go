@@ -210,7 +210,8 @@ func (a overlayAnim) offset() int {
 
 // overlayOpen reports whether any overlay is currently displayed.
 func (m Model) overlayOpen() bool {
-	return m.showHelp || m.showThemePick || m.promptMode || m.confirmMode
+	return m.showHelp || m.showThemePick || m.promptMode || m.confirmMode ||
+		(m.mail != nil && m.mail.confirm != nil)
 }
 
 // startSlide begins a selection crossfade if the cursor actually moved within an

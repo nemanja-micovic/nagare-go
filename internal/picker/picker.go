@@ -113,6 +113,7 @@ type Model struct {
 	flashes       map[string]flashState           // rows fading after a state change
 	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
 	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
+	mail          *mailbox                        // the mailbox view (F5), nil when closed
 }
 
 // New creates a new picker model with default settings.
@@ -317,6 +318,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
+	case mouseSelectMsg, mouseActivateMsg, mouseScrollMsg, mouseDismissMsg:
+		if m.mail != nil {
+			return m.handleMailMouse(msg), nil
+		}
+	}
+
+	switch msg := msg.(type) {
 	case mouseSelectMsg:
 		if msg.index < 0 || msg.index >= len(m.filtered) {
 			return m, nil
@@ -422,6 +430,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.mergeSavedSessions()
+		// The mailbox follows the scan clock, so a message arriving or being
+		// answered shows up without the user having to refresh.
+		if m.mail != nil {
+			m.mail.load(m.sessions)
+		}
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
 		if m.testNoScan {
@@ -551,6 +564,9 @@ func (m Model) View() tea.View {
 		// targets built while rendering it, then emits intent, so the mouse ends
 		// up driving the same handlers as the keyboard.
 		cursor := m.cursor
+		if m.mail != nil {
+			cursor = m.mail.cursor
+		}
 		v.OnMouse = func(msg tea.MouseMsg) tea.Cmd {
 			intent := hits.resolve(msg, cursor)
 			if intent == nil {
@@ -604,6 +620,10 @@ func (m Model) view() (string, hitTargets) {
 		if contentHeight < 1 {
 			contentHeight = 1
 		}
+	}
+
+	if m.mail != nil {
+		return m.viewMailbox()
 	}
 
 	var base string
@@ -700,6 +720,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	m.statusErr = ""
 	m.statusNote = ""
 
+	// The mailbox is a screen of its own and owns every key while open
+	if m.mail != nil {
+		return m.handleMailKey(msg)
+	}
+
 	// Theme picker intercepts all keys when open
 	if m.showThemePick {
 		return m.handleThemePickKey(key)
@@ -780,6 +805,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			log.Info("switched to list view")
 		}
 		return m, nil
+	case keyMailbox:
+		return m.openMailbox(), nil
 	case keyCycleTheme:
 		m.showThemePick = true
 		m.themeNames = theme.Names()

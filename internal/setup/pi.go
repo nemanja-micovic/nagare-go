@@ -49,11 +49,17 @@ function sessionId(ctx: ExtensionContext): string {
 // nagare's hook handler, so the event name is passed through verbatim. The
 // payload goes to stdin via a positional argument so no shell quoting applies
 // to the JSON itself.
-async function report(pi: ExtensionAPI, ctx: ExtensionContext, event: string): Promise<void> {
+async function report(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  event: string,
+  extra: Record<string, string> = {},
+): Promise<void> {
   const payload = JSON.stringify({
     hook_event_name: event,
     session_id: sessionId(ctx),
     cwd: ctx.cwd,
+    ...extra,
   });
   try {
     await pi.exec("sh", ["-c", 'printf %%s "$1" | "$0" hook-state', NAGARE, payload], {
@@ -77,80 +83,7 @@ async function callTool(pi: ExtensionAPI, name: string, args: unknown, signal?: 
   return { content: [{ type: "text" as const, text: text || "(no output)" }] };
 }
 
-// Messages from other agents. nagare queues each one as a file under
-// push/<pane>/; claiming it by rename means exactly one consumer delivers it.
-const PANE = (process.env.TMUX_PANE ?? "").replace(/^%%/, "");
-const DATA = join(homedir(), ".local", "share", "nagare");
-const PUSH_DIR = join(DATA, "push", PANE);
-const LISTENER = join(DATA, "listeners", PANE + ".json");
-
-function takePushes(): string[] {
-  let names: string[];
-  try {
-    names = readdirSync(PUSH_DIR).filter((n) => n.endsWith(".json")).sort();
-  } catch {
-    return [];
-  }
-  const texts: string[] = [];
-  for (const name of names) {
-    const claimed = join(PUSH_DIR, name + ".taken");
-    try {
-      renameSync(join(PUSH_DIR, name), claimed);
-    } catch {
-      continue; // claimed by another consumer
-    }
-    try {
-      const text = JSON.parse(readFileSync(claimed, "utf8")).text;
-      if (text) texts.push(text);
-    } catch {}
-    try {
-      unlinkSync(claimed);
-    } catch {}
-  }
-  return texts;
-}
-
-// Watch the push directory and inject messages as they arrive. Returns a
-// function that stops listening.
-function listen(pi: ExtensionAPI, current: () => ExtensionContext | undefined): () => void {
-  if (!PANE) return () => {};
-  try {
-    mkdirSync(PUSH_DIR, { recursive: true });
-    mkdirSync(join(DATA, "listeners"), { recursive: true });
-    writeFileSync(LISTENER, JSON.stringify({ pid: process.pid, agent: "pi" }));
-  } catch {
-    return () => {};
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deliver = () => {
-    timer = undefined;
-    const texts = takePushes();
-    if (texts.length === 0) return;
-    const text = texts.join("\n\n---\n\n");
-    const ctx = current();
-    try {
-      if (ctx && !ctx.isIdle()) pi.sendUserMessage(text, { deliverAs: "steer" });
-      else pi.sendUserMessage(text);
-    } catch {
-      try {
-        pi.sendUserMessage(text, { deliverAs: "followUp" });
-      } catch {}
-    }
-  };
-  // Coalesce the burst of events one atomic write produces.
-  const schedule = () => {
-    if (!timer) timer = setTimeout(deliver, 20);
-  };
-  const watcher = watch(PUSH_DIR, schedule);
-  schedule(); // anything queued before pi started
-  return () => {
-    watcher.close();
-    try {
-      unlinkSync(LISTENER);
-    } catch {}
-  };
-}
-
+__SHARED__
 export default function (pi: ExtensionAPI) {
   let ctxNow: ExtensionContext | undefined;
   let stopListening: (() => void) | undefined;
@@ -159,7 +92,7 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_e: unknown, ctx: ExtensionContext) => {
     ctxNow = ctx;
     stopListening?.();
-    stopListening = listen(pi, () => ctxNow);
+    stopListening = listen(pi, () => ctxNow, "pi");
   });
   pi.on("session_shutdown", async () => {
     stopListening?.();
@@ -175,10 +108,25 @@ export default function (pi: ExtensionAPI) {
     "session_shutdown",
   ] as const;
 
+  // agent_end carries the run's messages; agent_settled, which reports the
+  // run as finished, does not — so the final text is kept until then.
+  let finalText = "";
+  pi.on("agent_end", async (e: any) => {
+    finalText = lastAssistantText(e?.messages).slice(0, 100000);
+  });
+
   for (const event of statusEvents) {
-    pi.on(event, async (_e: unknown, ctx: ExtensionContext) => {
+    pi.on(event, async (e: any, ctx: ExtensionContext) => {
       ctxNow = ctx;
-      await report(pi, ctx, event);
+      const extra: Record<string, string> = {};
+      // The prompt tells nagare whether the user spoke, which cancels any
+      // reply pi owed another agent.
+      if (event === "before_agent_start" && typeof e?.prompt === "string") extra.prompt = e.prompt;
+      if (event === "agent_settled" && finalText) {
+        extra.last_assistant_message = finalText;
+        finalText = "";
+      }
+      await report(pi, ctx, event, extra);
     });
   }
 
@@ -201,6 +149,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       target: Type.String({ description: __DESC_target__ }),
       message: Type.String({ description: "message to send" }),
+      expects_reply: Type.Optional(Type.Boolean({ description: __DESC_expects_reply__ })),
     }),
     async execute(_id, params, signal) {
       return callTool(pi, "send_message", params, signal);
@@ -258,6 +207,7 @@ func installPiExtension(home, nagareBin string) error {
 	}
 	path := filepath.Join(dir, "nagare.ts")
 	content := piDescriptions().Replace(fmt.Sprintf(piExtensionTemplate, nagareBin))
+	content = strings.Replace(content, "__SHARED__", piFamilyShared, 1)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return err
 	}
@@ -270,7 +220,10 @@ func installPiExtension(home, nagareBin string) error {
 // agents. They are substituted after Sprintf so a "%" in a description can
 // never be read as a format verb.
 func piDescriptions() *strings.Replacer {
-	pairs := []string{"__DESC_target__", strconv.Quote(mcp.TargetDescription)}
+	pairs := []string{
+		"__DESC_target__", strconv.Quote(mcp.TargetDescription),
+		"__DESC_expects_reply__", strconv.Quote(mcp.ExpectsReplyDescription),
+	}
 	for _, name := range mcp.ToolNames() {
 		pairs = append(pairs, "__DESC_"+name+"__", strconv.Quote(mcp.ToolDescription(name)))
 	}

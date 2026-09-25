@@ -19,14 +19,17 @@ func textResult(s string) (*mcp.CallToolResult, any, error) {
 // a send, and no check_messages to receive.
 const (
 	descListAgents = "List the other AI agent sessions with their status. Rarely needed: send_message accepts a repo, worktree, or agent type as the target and lists the agents itself when a name does not match."
-	descSend       = "Message another agent session. It is delivered straight into their conversation, even while they are busy, and their reply arrives in yours automatically — do not poll. Call this directly; you do not need list_agents first."
-	descSendWait   = "Message another agent session and block until they reply, returning the reply. Use only when you cannot continue without the answer; otherwise prefer send_message, whose reply also arrives automatically."
+	descSend       = "Message other agent sessions. Delivered straight into their conversation, even while they are busy. Set expects_reply when you ask something: the answer comes back into your conversation automatically when they finish, while you keep working — do not poll. Call it directly, without list_agents. target may name several agents separated by commas, or be \"all\"."
+	descSendWait   = "Message another agent session and block until it answers, returning the answer. Most agents answer simply by finishing their turn, so this returns as soon as they are done. Use it when you cannot continue without the answer."
 	descCheck      = "Read your nagare inbox. Rarely needed: messages from other agents are delivered into your conversation automatically, starting with \"[nagare]\"."
-	descReply      = "Answer a message another agent sent you, using the message_id shown in it. The answer is delivered straight into their conversation."
+	descReply      = "Answer a message another agent sent you, using the message_id shown in it. Usually unnecessary: when a message says your final message is sent back, just answer in it. Use this to answer mid-turn, or a message you were not asked to answer."
 )
 
 // TargetDescription documents the target argument of the send tools.
-const TargetDescription = "who to message: a session name, or a repo, worktree, or agent type (claude, codex, pi, opencode...) if that is unique"
+const TargetDescription = "who to message: a session name, or a repo, worktree, or agent type (claude, codex, pi, opencode...) if that is unique; several separated by commas, or \"all\""
+
+// ExpectsReplyDescription documents send_message's expects_reply argument.
+const ExpectsReplyDescription = "true when you are asking something: their answer comes back to you automatically when they finish their turn, and you can keep working meanwhile"
 
 // ToolDescription returns the description of a nagare tool, for agents that
 // register the tools themselves rather than over MCP.
@@ -49,8 +52,9 @@ func instructions(self, agents string) string {
 	fmt.Fprintf(&b, "nagare connects you with the other AI coding agents running in this tmux server. You are %q.\n", self)
 	b.WriteString("- To message an agent, call send_message with its name. A repo, worktree, or agent type (\"codex\", \"claude\") works when unique. Do not call list_agents first; an unknown name returns the list of agents.\n")
 	b.WriteString("- Messages reach the other agent at once, even while it is busy. Their reply arrives in your conversation by itself, as text starting with \"[nagare]\" — do not poll or call check_messages.\n")
-	b.WriteString("- Messages to you arrive the same way. Answer with reply(message_id, content).\n")
-	b.WriteString("- Use send_message_and_wait only when you cannot continue without the answer.\n")
+	b.WriteString("- Messages to you arrive the same way. When one asks for an answer, just answer: the final message of your turn is sent back to the sender. reply(message_id, content) is for answering mid-turn.\n")
+	b.WriteString("- target can list several agents separated by commas, or be \"all\".\n")
+	b.WriteString("- Asking something? Use send_message with expects_reply=true: the answer arrives by itself when they finish. Use send_message_and_wait only when you cannot continue without it.\n")
 	if agents != "" && agents != noAgents {
 		fmt.Fprintf(&b, "\nAgents running when this session started:\n%s\n", agents)
 	}
@@ -64,7 +68,7 @@ func RunServer() error {
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "nagare",
-		Version: "2.0.0",
+		Version: "2.1.0",
 	}, &mcp.ServerOptions{Instructions: instructions(self, roster(sessions, self))})
 
 	// The caller is resolved per call, not once: an agent's display name

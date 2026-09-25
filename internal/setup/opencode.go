@@ -20,7 +20,7 @@ import (
 // directory and hands each message from another agent to the session through
 // the SDK client, so it arrives without anyone typing into the pane.
 const opencodePluginTemplate = `// Installed by "nagare-go setup". Regenerated on every run — edit nagare instead.
-import { mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, watch, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, watch, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 
@@ -69,11 +69,12 @@ function takePushes() {
 }
 
 export const NagarePlugin = async ({ $, client, directory, worktree }) => {
-  const report = async (type) => {
+  const report = async (type, extra = {}) => {
     const payload = JSON.stringify({
       hook_event_name: type,
       session_id: "opencode-" + (worktree ?? directory ?? ""),
       cwd: directory ?? worktree ?? "",
+      ...extra,
     })
     try {
       await $` + "`printf %%s ${payload} | ${NAGARE} hook-state`" + `.quiet()
@@ -140,10 +141,48 @@ export const NagarePlugin = async ({ $, client, directory, worktree }) => {
     }
   }
 
+  // The final assistant text of a session's last turn. nagare sends it back
+  // as the reply when the turn answered another agent, sparing a reply tool
+  // call — so it is only fetched when this pane owes a reply at all.
+  const finalText = async (id) => {
+    if (!PANE || !existsSync(join(DATA, "owed", PANE + ".json"))) return ""
+    try {
+      const res = await client.session.messages({ path: { id } })
+      const list = res?.data ?? res ?? []
+      for (let i = list.length - 1; i >= 0; i--) {
+        const m = list[i]
+        if (m?.info?.role !== "assistant") continue
+        const text = (m.parts ?? [])
+          .filter((p) => p?.type === "text" && !p.synthetic && typeof p.text === "string")
+          .map((p) => p.text)
+          .join("\n")
+          .trim()
+        if (text) return text.slice(0, 100000)
+      }
+    } catch {}
+    return ""
+  }
+
   return {
     event: async ({ event }) => {
       track(event)
-      if (REPORTED.has(event.type)) await report(event.type)
+      if (!REPORTED.has(event.type)) return
+      const extra = {}
+      const id = event.properties?.sessionID
+      if (event.type === "session.idle" && id && id === sessionID) {
+        const text = await finalText(id)
+        if (text) extra.last_assistant_message = text
+      }
+      await report(event.type, extra)
+    },
+    // A prompt the user types cancels any reply this pane owed another agent;
+    // one nagare injected (starting "[nagare]") does not.
+    "chat.message": async (_input, output) => {
+      const text = (output?.parts ?? [])
+        .filter((p) => p?.type === "text" && typeof p.text === "string")
+        .map((p) => p.text)
+        .join("\n")
+      if (text) await report("chat.message", { prompt: text })
     },
   }
 }
