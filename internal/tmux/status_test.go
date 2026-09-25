@@ -3,7 +3,7 @@ package tmux
 import (
 	"testing"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 func TestDetectStatus_Empty(t *testing.T) {

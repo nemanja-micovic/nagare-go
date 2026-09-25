@@ -10,8 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // sentKeys records what focus mode would have sent to tmux.

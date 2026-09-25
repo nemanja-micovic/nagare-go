@@ -1,4 +1,4 @@
-module github.com/nemke/nagare-go
+module github.com/nemanja-micovic/nagare-go
 
 go 1.26.1
 

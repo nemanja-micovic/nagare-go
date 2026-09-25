@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nemke/nagare-go/internal/git"
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/git"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // RawSession is a parsed tmux session from list-sessions.

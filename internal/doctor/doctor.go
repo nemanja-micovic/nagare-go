@@ -15,8 +15,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/nemke/nagare-go/internal/paths"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // Level is how a check came out.

@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/nemke/nagare-go/internal/log"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/log"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // handleThemePickKey handles keys when the theme picker overlay is open.

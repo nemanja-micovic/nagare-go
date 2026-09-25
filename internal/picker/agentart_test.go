@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/muesli/ansi"
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // Logos are joined horizontally with session details, so every logo must have

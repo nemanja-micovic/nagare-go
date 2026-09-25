@@ -6,7 +6,7 @@ import (
 	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 var errEmptyName = errors.New("name is required")

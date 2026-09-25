@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nemke/nagare-go/internal/config"
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/notifications"
-	"github.com/nemke/nagare-go/internal/state"
-	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemanja-micovic/nagare-go/internal/config"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/notifications"
+	"github.com/nemanja-micovic/nagare-go/internal/state"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // HookEvent is the JSON structure received on stdin from an agent hook,

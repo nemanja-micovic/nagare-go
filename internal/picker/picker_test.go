@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 func fakeSessions() []models.Session {

@@ -9,10 +9,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nemke/nagare-go/internal/log"
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/session"
-	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemanja-micovic/nagare-go/internal/log"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/session"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // Focus mode hosts agents' live terminals inside nagare.

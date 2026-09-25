@@ -6,8 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 )
 
 // TestLayoutRoundTrip — closing in focus mode saves the tiles; the next start

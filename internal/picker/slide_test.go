@@ -9,7 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // TestSlideIsInertWhenSettled — outside a crossfade the tint has to be exactly the

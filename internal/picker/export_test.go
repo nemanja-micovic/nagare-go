@@ -1,6 +1,6 @@
 package picker
 
-import "github.com/nemke/nagare-go/internal/tmux"
+import "github.com/nemanja-micovic/nagare-go/internal/tmux"
 
 // NewForTest returns a Model with the live tmux scanner disabled. Tests drive
 // the session list exclusively via SessionsUpdatedMsg, which keeps runs

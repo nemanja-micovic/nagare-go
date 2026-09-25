@@ -10,9 +10,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nemke/nagare-go/internal/git"
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/git"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // The review panel answers the question every agent session ends with: what did

@@ -2,12 +2,12 @@ package state
 
 import (
 	"encoding/json"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/nemke/nagare-go/internal/fsutil"
+	"github.com/nemanja-micovic/nagare-go/internal/fsutil"
 )
 
 // RegisteredSession is a session tracked in the registry.

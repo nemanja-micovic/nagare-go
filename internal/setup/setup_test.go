@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nemke/nagare-go/internal/hooks"
-	"github.com/nemke/nagare-go/internal/mcp"
+	"github.com/nemanja-micovic/nagare-go/internal/hooks"
+	"github.com/nemanja-micovic/nagare-go/internal/mcp"
 )
 
 func TestInstallClaudeHooks_NewFile(t *testing.T) {

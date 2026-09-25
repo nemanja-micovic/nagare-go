@@ -10,7 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 var sgrRe2 = regexp.MustCompile("^\x1b\\[[0-9;:]*m")

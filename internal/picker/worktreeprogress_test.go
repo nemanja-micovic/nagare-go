@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // The spinner must stay up until the agent's pane actually exists, not merely

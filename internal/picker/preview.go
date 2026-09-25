@@ -1,6 +1,6 @@
 package picker
 
-import "github.com/nemke/nagare-go/internal/tmux"
+import "github.com/nemanja-micovic/nagare-go/internal/tmux"
 
 // CapturePreview captures the current pane content for a session.
 func CapturePreview(sessionName string, windowIndex, paneIndex int) string {

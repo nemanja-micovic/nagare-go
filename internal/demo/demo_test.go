@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // TestScenariosAreComplete — every agent the demo starts has a script, and

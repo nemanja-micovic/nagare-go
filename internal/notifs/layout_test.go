@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nemke/nagare-go/internal/notifications"
+	"github.com/nemanja-micovic/nagare-go/internal/notifications"
 )
 
 // seeded builds a notification centre with a fixed item list, so the test does

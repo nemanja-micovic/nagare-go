@@ -3,7 +3,7 @@ package picker
 import (
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // nextAttention returns the index of the next session that is waiting on the

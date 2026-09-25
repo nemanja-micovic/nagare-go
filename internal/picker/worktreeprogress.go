@@ -8,9 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/session"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/session"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // worktreeCreatedMsg reports the result of the tmux and git work. It says

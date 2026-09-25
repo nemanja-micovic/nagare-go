@@ -6,8 +6,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/nemke/nagare-go/internal/bin"
-	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemanja-micovic/nagare-go/internal/bin"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // BuildToastMessage creates a human-readable notification message.

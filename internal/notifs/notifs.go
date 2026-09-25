@@ -8,10 +8,10 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/nemke/nagare-go/internal/config"
-	"github.com/nemke/nagare-go/internal/notifications"
-	"github.com/nemke/nagare-go/internal/session"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/config"
+	"github.com/nemanja-micovic/nagare-go/internal/notifications"
+	"github.com/nemanja-micovic/nagare-go/internal/session"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // Model is the Bubble Tea model for the notification center TUI.

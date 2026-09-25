@@ -2,13 +2,13 @@ package state
 
 import (
 	"encoding/json"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/nemke/nagare-go/internal/fsutil"
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/fsutil"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // DefaultStatesDir returns the default states directory path.

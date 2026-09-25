@@ -2,7 +2,7 @@ package log
 
 import (
 	"fmt"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"time"

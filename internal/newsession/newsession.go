@@ -11,10 +11,10 @@ import (
 	"charm.land/lipgloss/v2"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nemke/nagare-go/internal/config"
-	"github.com/nemke/nagare-go/internal/session"
-	"github.com/nemke/nagare-go/internal/state"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/config"
+	"github.com/nemanja-micovic/nagare-go/internal/session"
+	"github.com/nemanja-micovic/nagare-go/internal/state"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 const customPathSentinel = "__custom__"

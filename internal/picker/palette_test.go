@@ -7,8 +7,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/nemke/nagare-go/internal/git"
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/git"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 func TestPaletteRunsAnAction(t *testing.T) {

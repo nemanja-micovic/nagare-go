@@ -3,13 +3,13 @@ package setup
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/nemke/nagare-go/internal/bin"
+	"github.com/nemanja-micovic/nagare-go/internal/bin"
 )
 
 // Claude Code hook events nagare subscribes to, with matcher="" (all).

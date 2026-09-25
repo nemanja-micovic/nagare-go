@@ -11,9 +11,9 @@ import (
 	"strings"
 	"syscall"
 
-	nagaregit "github.com/nemke/nagare-go/internal/git"
-	"github.com/nemke/nagare-go/internal/paths"
-	"github.com/nemke/nagare-go/internal/tmux"
+	nagaregit "github.com/nemanja-micovic/nagare-go/internal/git"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // Env is a running demo: a private tmux server, a throwaway data directory and

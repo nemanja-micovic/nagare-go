@@ -7,8 +7,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/nemke/nagare-go/internal/session"
-	"github.com/nemke/nagare-go/internal/theme"
+	"github.com/nemanja-micovic/nagare-go/internal/session"
+	"github.com/nemanja-micovic/nagare-go/internal/theme"
 )
 
 // QuickModel is the quick-prototype form (name + agent only).

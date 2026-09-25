@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nemke/nagare-go/internal/git"
-	"github.com/nemke/nagare-go/internal/log"
-	"github.com/nemke/nagare-go/internal/state"
-	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemanja-micovic/nagare-go/internal/git"
+	"github.com/nemanja-micovic/nagare-go/internal/log"
+	"github.com/nemanja-micovic/nagare-go/internal/state"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // worktreeLaunch describes how to start an agent in a new worktree.

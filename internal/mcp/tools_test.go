@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nemke/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
 )
 
 // TestSendMessage tests sending a message to react session

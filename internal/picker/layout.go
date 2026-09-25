@@ -7,10 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/nemke/nagare-go/internal/fsutil"
-	"github.com/nemke/nagare-go/internal/log"
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/fsutil"
+	"github.com/nemanja-micovic/nagare-go/internal/log"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 )
 
 // Layout restore: nagare reopens the tiles you last had open, as long as their

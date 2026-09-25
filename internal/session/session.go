@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nemke/nagare-go/internal/config"
-	"github.com/nemke/nagare-go/internal/log"
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/state"
-	"github.com/nemke/nagare-go/internal/tmux"
+	"github.com/nemanja-micovic/nagare-go/internal/config"
+	"github.com/nemanja-micovic/nagare-go/internal/log"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/state"
+	"github.com/nemanja-micovic/nagare-go/internal/tmux"
 )
 
 // ResolvePath resolves a path. If it contains no / and no ~, prepend QuickProjectPath.

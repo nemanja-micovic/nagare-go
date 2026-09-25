@@ -5,8 +5,8 @@ something the product does today; keep it that way when editing.
 
 ## Before announcing
 
-1. Settle the module path (`go.mod` says `github.com/nemke/nagare-go`, the repo is
-   `github.com/nemanja-micovic/nagare-go`) so `go install …@latest` works.
+1. The module path is `github.com/nemanja-micovic/nagare-go`, matching the repo, so
+   `go install github.com/nemanja-micovic/nagare-go@latest` works once pushed.
 2. Tag `v0.1.0` and push the tag: the release workflow builds Linux and macOS
    binaries for amd64 and arm64, which `install.sh` downloads.
 3. Check a clean machine end to end: `install.sh`, `nagare-go demo`,

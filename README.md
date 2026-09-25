@@ -36,7 +36,7 @@ cd nagare-go
 ./nagare-go             # open nagare
 ```
 
-Requires tmux 3.2+ and git. Prebuilt binaries: see [Releases](https://github.com/nemanja-micovic/nagare-go/releases), or
+Requires tmux 3.2+ and git. With Go installed: `go install github.com/nemanja-micovic/nagare-go@latest`. Prebuilt binaries: see [Releases](https://github.com/nemanja-micovic/nagare-go/releases), or
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nemanja-micovic/nagare-go/main/install.sh | sh

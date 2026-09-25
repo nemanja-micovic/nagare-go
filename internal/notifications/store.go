@@ -2,14 +2,14 @@ package notifications
 
 import (
 	"encoding/json"
-	"github.com/nemke/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nemke/nagare-go/internal/fsutil"
+	"github.com/nemanja-micovic/nagare-go/internal/fsutil"
 )
 
 // Notification is a stored notification entry.

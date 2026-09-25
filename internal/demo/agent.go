@@ -13,9 +13,9 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"github.com/nemke/nagare-go/internal/models"
-	"github.com/nemke/nagare-go/internal/paths"
-	"github.com/nemke/nagare-go/internal/state"
+	"github.com/nemanja-micovic/nagare-go/internal/models"
+	"github.com/nemanja-micovic/nagare-go/internal/paths"
+	"github.com/nemanja-micovic/nagare-go/internal/state"
 )
 
 // A simulated coding agent, for the demo.
