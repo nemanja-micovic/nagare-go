@@ -23,6 +23,9 @@ import (
 	"github.com/nemke/nagare-go/internal/theme"
 )
 
+// version is stamped by release builds (-ldflags "-X main.version=...").
+var version = "dev"
+
 func main() {
 	// A demo agent is this binary started under an agent's name; it must not
 	// parse nagare's own command line.
@@ -40,8 +43,9 @@ func main() {
 	log.Info("starting nagare-go, theme=%s", cfg.Appearance.Theme)
 
 	rootCmd := &cobra.Command{
-		Use:   "nagare-go",
-		Short: "tmux session manager for AI coding agents",
+		Use:     "nagare-go",
+		Short:   "Every coding agent, one screen",
+		Version: version,
 	}
 
 	pickCmd := &cobra.Command{

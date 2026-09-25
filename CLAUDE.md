@@ -19,6 +19,7 @@ go vet ./...               # lint
 ```bash
 nagare-go                  # launch picker (default)
 nagare-go pick             # launch picker
+nagare-go demo [--speed N] # try nagare with simulated agents on a private tmux server
 nagare-go hook-state       # handle agent hook/plugin/extension events (stdin JSON)
 nagare-go setup            # install status reporting + MCP server + slash commands
 nagare-go notifs           # notification center TUI
@@ -51,6 +52,8 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/bin` — shared binary finder
 - `internal/fsutil` — atomic file writes
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
+- `internal/paths` — the data directory (`$NAGARE_DATA_DIR`, default ~/.local/share/nagare)
+- `internal/demo` — `nagare-go demo`: simulated agents, throwaway repos, private tmux server
 
 ### Worktrees
 
@@ -170,10 +173,15 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | F4 | Jump to the next session waiting on you |
 | F1 | Help overlay |
 
+Also in the list: `Ctrl+k` command palette, `Ctrl+d` review the selected agent's
+changes.
+
 Focus mode keys: everything goes to the agent except `Ctrl+]` (back to the list;
-`picker.focus_leave_key`), `Alt+↑/↓` (switch agent), `F4` (next waiting), `Alt+s`
-(companion shell), `Shift+PgUp/PgDn` (scrollback), `Alt+z` (zoom), `F1`, `F5`
-(open in tmux; outside tmux the attach returns to nagare on detach). A single
+`picker.focus_leave_key`), `Alt+↑/↓` (switch the tile's agent), `Alt+v` (split),
+`Alt+←/→` (move between tiles), `Alt+x` (close tile), `F4` (next waiting), `Alt+s`
+(companion shell), `Alt+d` (review), `Alt+k` (palette), `Shift+PgUp/PgDn`
+(scrollback), `Alt+z` (zoom), `F1`, `F5` (open in tmux; outside tmux the attach
+returns to nagare on detach). A single
 click on a sidebar row switches focus — the list's select-then-activate guard
 exists because activating used to leave nagare, and switching focus leaves
 nothing.
@@ -265,6 +273,69 @@ it — not the tmux sessions already running — support varies per agent (pi ha
 none), and the agent's own TUI is lost. Driving the real terminal works for every
 agent today; ACP may still suit a narrower job later, like structured permission
 prompts.
+
+### Split view
+
+Focus mode holds up to `maxTiles` (4) panes as tiles. `Alt+v` adds the next agent
+that is not on screen; each tile's window is fitted to its own rectangle.
+
+- **Tiles are a fixed array**, `[maxTiles]paneView` plus a count, not a slice. The
+  Model is copied by value on every update, and a slice's shared backing array let
+  one copy's edits leak into another.
+- **Side by side only while each tile keeps `sideBySideTermW` (60) columns**;
+  below that tiles stack. A coding agent squeezed narrower wraps nearly every
+  line, and the first recording of the demo showed exactly that.
+- **Background tiles poll every `focusBackgroundPoll` (300ms)**, the active one at
+  the adaptive rate. Four tiles at 30fps would be 120 tmux calls a second.
+- The active tile wears the gradient; background tiles take `Border` and a muted
+  title — but "needs you" stays loud in every tile, since that is what a background
+  tile is for. `geometryFor(n+1).fits()` refuses a split that would make tiles
+  unreadable, with a note saying how to make room.
+- A four-tile frame is 0.74ms (`BenchmarkViewFocusSplit4`).
+
+### Review panel
+
+`Alt+d` / `Ctrl+d` (`review.go`) lists `git.Changes` — uncommitted files with line
+counts against HEAD — beside git's own `--color=always` diff, preamble stripped.
+Loads run as commands with a generation counter so a slow diff for an old
+selection is dropped. Untracked directories are skipped: under `-uall` they are
+nested repositories, usually a worktree inside the repo. For the same reason
+`git.AddWorktree` adds `/.worktrees/` to the clone's `.git/info/exclude` — without
+it every nagare worktree showed up in the main checkout's `git status`.
+
+### Command palette
+
+`Ctrl+k` / `Alt+k` (`palette.go`) fuzzy-matches every action valid in the current
+mode plus every running agent. An action *is* its key binding: running it replays
+the keypress through `Update`, so the palette cannot drift from the keys.
+`TestFocusPaletteActionsNeverReachTheAgent` replays every focus-mode action and
+fails if any reaches the agent as a keystroke.
+
+### Demo mode
+
+`nagare-go demo` (`internal/demo`) is how people try nagare, and how the README GIF
+is made. Simulated agents are the nagare binary started through symlinks named
+`claude`, `codex`, `opencode`, so the scanner detects them unmodified; `main`
+dispatches to `demo.RunAgent` before cobra when `NAGARE_DEMO` is set and argv[0] is
+an agent name. They write the same state files hooks write (note the hook
+vocabulary: running is `"working"` on disk), make real edits in real git repos,
+and block on permission prompts that read stdin.
+
+Isolation: `NAGARE_TMUX_SOCKET` routes every tmux call through `tmux.Command` to a
+private server, and `NAGARE_DATA_DIR` moves state, registry, log and messages to a
+temp dir. `TMUX` is unset, so the picker treats itself as outside tmux.
+
+Cleanup must survive any exit. `Close` kills the demo server **by explicit socket
+name** — a `kill-server` falling through to the default socket would take down the
+user's real sessions. SIGHUP runs cleanup. Agents poll their parent pid and exit
+when it is gone, so after a `kill -9` tmux runs out of sessions and stops the
+server itself; the next demo sweeps temp dirs whose recorded pid is dead.
+
+The GIF is regenerated by `scripts/demo-gif/make.sh` (pyte + headless Chromium +
+Pillow, no VHS needed) or `vhs docs/demo.tape`. pyte lacks REP and SU/SD, which
+Bubble Tea's renderer emits; `record.py` adds them, or rows vanish from frames and
+look like rendering bugs that are not there. Send key chords (`ESC v`) in one
+write: split across writes, `Alt+v` arrives as Esc then `v`.
 
 ### Layout: measure, never assume
 

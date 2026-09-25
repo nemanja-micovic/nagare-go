@@ -58,6 +58,9 @@ const (
 	// go below them is refused rather than drawn unreadably.
 	minTileTermW = 30
 	minTileTermH = 5
+	// sideBySideTermW is the narrowest a tile may be before tiles stack
+	// instead of sharing the width.
+	sideBySideTermW = 60
 )
 
 // paneView is one tile: a pane shown in focus mode, and everything nagare knows
@@ -184,7 +187,9 @@ func (m Model) geometryFor(n int) focusGeometry {
 // column keeps room for a real agent screen; below that tiles stack, because a
 // coding agent needs width more than it needs height.
 func tileLayout(n, x, w, h int) []tileRect {
-	wide := w >= 2*(minTileTermW+4)+20
+	// Side by side only while each column keeps a comfortable agent screen;
+	// a coding agent squeezed under ~60 columns wraps nearly every line.
+	wide := w/2-4 >= sideBySideTermW
 	half := w / 2
 	col := func(x, w, count int) []tileRect {
 		out := make([]tileRect, count)
