@@ -3,8 +3,10 @@ package tmux
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // Screen is one snapshot of a pane: what it shows and where its cursor is.
@@ -111,7 +113,7 @@ func fitWindow(run Runner, target string, w, h int, zoom bool) {
 		run("resize-pane", "-Z", "-t", target)
 	}
 	run("resize-window", "-t", target, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h),
-		";", "set-option", "-w", "-t", target, focusMark, "1")
+		";", "set-option", "-w", "-t", target, focusMark, strconv.Itoa(os.Getpid()))
 }
 
 // ReleaseWindow undoes FitWindow: the window goes back to following the clients
@@ -136,14 +138,28 @@ func releaseWindow(run Runner, target string, unzoom bool) {
 // ReleaseStaleWindows hands back every window a previous run resized and never
 // released — after a crash, or a kill -9. Without it such a window would stay
 // pinned at nagare's size the next time the user attached to it.
+//
+// The mark holds the pid of the nagare that fitted the window, and only windows
+// whose owner is gone are released: a second nagare running alongside keeps
+// its tiles.
 func ReleaseStaleWindows() {
 	out := RunTmux("list-windows", "-a", "-F", "#{window_id} #{"+focusMark+"}")
 	for _, line := range strings.Split(out, "\n") {
 		id, mark, ok := strings.Cut(strings.TrimSpace(line), " ")
-		if ok && mark == "1" {
+		if ok && mark != "" && markIsStale(mark) {
 			ReleaseWindow(id, false)
 		}
 	}
+}
+
+// markIsStale reports whether a focus mark's owner is gone. "1" is the mark an
+// earlier version wrote, with no owner recorded.
+func markIsStale(mark string) bool {
+	pid, err := strconv.Atoi(mark)
+	if err != nil || pid <= 1 {
+		return true
+	}
+	return syscall.Kill(pid, 0) == syscall.ESRCH
 }
 
 // shellMark is the window option tying a companion shell to its agent's pane.

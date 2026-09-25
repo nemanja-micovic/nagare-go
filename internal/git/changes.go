@@ -21,31 +21,39 @@ type Change struct {
 	Binary    bool
 }
 
-// Changes lists the files with uncommitted work in dir — everything an agent
-// has done there that is not yet in a commit — with line counts against HEAD.
-func Changes(dir string) ([]Change, error) {
-	out, err := exec.Command("git", "-C", dir, "status", "--porcelain=v1", "-z", "-uall").Output()
+// Changes lists the files with uncommitted work in the repository holding dir —
+// everything an agent has done that is not yet in a commit — with line counts
+// against HEAD. Paths are relative to the returned root, the repository's top
+// level: an agent working in a subdirectory still changes files by their
+// repository path, and that is what git reports.
+func Changes(dir string) (root string, changes []Change, err error) {
+	top, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	changes := parsePorcelainZ(out)
+	root = strings.TrimSpace(string(top))
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain=v1", "-z", "-uall").Output()
+	if err != nil {
+		return "", nil, err
+	}
+	changes = parsePorcelainZ(out)
 
 	counts := map[string][2]int{}
 	binary := map[string]bool{}
-	if num, err := exec.Command("git", "-C", dir, "diff", "HEAD", "--numstat", "-z").Output(); err == nil {
+	if num, err := exec.Command("git", "-C", root, "diff", "HEAD", "--numstat", "-z").Output(); err == nil {
 		counts, binary = parseNumstatZ(num)
 	}
 	for i := range changes {
 		c := &changes[i]
 		if c.Untracked {
-			c.Added, c.Binary = countLines(filepath.Join(dir, c.Path))
+			c.Added, c.Binary = countLines(filepath.Join(root, c.Path))
 			continue
 		}
 		n := counts[c.Path]
 		c.Added, c.Removed, c.Binary = n[0], n[1], binary[c.Path]
 	}
 	sort.SliceStable(changes, func(a, b int) bool { return changes[a].Path < changes[b].Path })
-	return changes, nil
+	return root, changes, nil
 }
 
 // parsePorcelainZ parses `git status --porcelain=v1 -z`. Renames carry their
@@ -123,8 +131,10 @@ func countLines(path string) (int, bool) {
 }
 
 // FileDiff returns git's own coloured diff of one changed file against HEAD.
-// An untracked file is shown as entirely added.
-func FileDiff(dir string, c Change) (string, error) {
+// root is the repository top level Changes returned. An untracked file is shown
+// as entirely added.
+func FileDiff(root string, c Change) (string, error) {
+	dir := root
 	var cmd *exec.Cmd
 	if c.Untracked {
 		// --no-index exits 1 whenever the files differ, which here is always.

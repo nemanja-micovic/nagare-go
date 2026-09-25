@@ -299,10 +299,14 @@ func (m *Model) startFocus() {
 func (m Model) showInTile(s models.Session, target string, shell bool) (Model, tea.Cmd) {
 	if !m.focus.on {
 		m.startFocus()
-	} else {
-		m.releaseTile(m.focus.active)
 	}
-	m.focus.tiles[m.focus.active] = paneView{
+	return m.showInTileAt(m.focus.active, s, target, shell)
+}
+
+// showInTileAt is showInTile for any tile, leaving the keyboard where it is.
+func (m Model) showInTileAt(i int, s models.Session, target string, shell bool) (Model, tea.Cmd) {
+	m.releaseTile(i)
+	m.focus.tiles[i] = paneView{
 		pane:  target,
 		key:   sessionKey(s),
 		name:  s.Name,
@@ -310,8 +314,8 @@ func (m Model) showInTile(s models.Session, target string, shell bool) (Model, t
 		shell: shell,
 	}
 	m.focus.delay = focusFastPoll
-	m.selectKey(sessionKey(s))
-	log.Info("focus %s (%s) in tile %d", s.Name, target, m.focus.active)
+	m.selectKey(m.focus.cur().key)
+	log.Info("focus %s (%s) in tile %d", s.Name, target, i)
 	m.fitFocus(true)
 	return m, m.focusPoll(0)
 }
@@ -353,17 +357,31 @@ func (m Model) addTileFor(s models.Session) (Model, tea.Cmd) {
 	return m.showInTile(s, agentTarget(s), false)
 }
 
-// closeTile removes the active tile. Closing the last one leaves focus mode.
+// closeTile removes the active tile. Closing the last one leaves focus mode —
+// and, being a deliberate "done", forgets the saved layout too.
 func (m Model) closeTile() (Model, tea.Cmd) {
-	f := &m.focus
-	if f.n <= 1 {
-		return m.leaveFocus(), m.doPreview()
+	if m.focus.n <= 1 {
+		m.releaseFocus()
+		m.forgetLayout()
+		return m, m.doPreview()
 	}
-	m.releaseTile(f.active)
-	copy(f.tiles[f.active:], f.tiles[f.active+1:f.n])
+	return m.closeTileAt(m.focus.active)
+}
+
+// closeTileAt removes tile i. The keyboard stays on the tile it was on: an
+// agent exiting in the background must never redirect what the user is typing.
+func (m Model) closeTileAt(i int) (Model, tea.Cmd) {
+	f := &m.focus
+	m.releaseTile(i)
+	copy(f.tiles[i:], f.tiles[i+1:f.n])
 	f.n--
 	f.tiles[f.n] = paneView{}
-	f.active = min(f.active, f.n-1)
+	switch {
+	case i < f.active:
+		f.active--
+	case i == f.active:
+		f.active = min(f.active, f.n-1)
+	}
 	m.selectKey(f.cur().key)
 	m.fitFocus(true)
 	return m, m.focusPoll(0)
@@ -428,7 +446,9 @@ func (m *Model) selectKey(key string) {
 }
 
 // leaveFocus returns to the list, handing every tile's window back to tmux.
+// The tiles are remembered, so the next start reopens them.
 func (m Model) leaveFocus() Model {
+	m.saveLayout()
 	m.releaseFocus()
 	return m
 }
@@ -463,7 +483,7 @@ func (m *Model) releaseFocus() {
 // Called once the program has exited, so a window is never left pinned to
 // nagare's size.
 func (m Model) Close() {
-	m.saveLayout()
+	m.saveLayout() // a no-op unless nagare is closing in focus mode
 	if m.focus.q == nil {
 		return
 	}
@@ -540,15 +560,20 @@ func (m Model) focusCapture(seq int) tea.Cmd {
 	}
 	q, counter := f.q, f.captures
 	return func() tea.Msg {
-		var n uint64
-		// Numbered on the worker, in the order the captures actually ran.
-		q.Do(func() { *counter++; n = *counter })
-		snaps := make([]tileSnap, len(wants))
-		for i, w := range wants {
-			sc, err := q.Capture(w.pane, w.scroll, w.height)
-			snaps[i] = tileSnap{pane: w.pane, screen: sc, err: err}
-		}
-		return focusSnapMsg{seq: seq, n: n, snaps: snaps}
+		reply := make(chan focusSnapMsg, 1)
+		// One job for the number and the captures, so the number is the order
+		// the captures actually ran in — two loops racing to the queue cannot
+		// be numbered one way and captured the other.
+		q.Do(func() {
+			*counter++
+			snaps := make([]tileSnap, len(wants))
+			for i, w := range wants {
+				sc, err := q.CaptureNow(w.pane, w.scroll, w.height)
+				snaps[i] = tileSnap{pane: w.pane, screen: sc, err: err}
+			}
+			reply <- focusSnapMsg{seq: seq, n: *counter, snaps: snaps}
+		})
+		return <-reply
 	}
 }
 
@@ -563,7 +588,15 @@ func (m Model) updateFocus(msg tea.Msg) (Model, tea.Cmd) {
 
 	case focusSnapMsg:
 		f := &m.focus
-		if !f.on || msg.n <= f.applied {
+		if !f.on {
+			return m, nil
+		}
+		if msg.n <= f.applied {
+			// Older than what is on screen, so not applied — but if it belongs
+			// to the current loop, the loop must go on, or polling would stop.
+			if msg.seq == f.seq {
+				return m, m.focusPoll(f.delay)
+			}
 			return m, nil
 		}
 		f.applied = msg.n
@@ -653,12 +686,9 @@ func (m *Model) applySnap(i int, sc tmux.Screen) bool {
 func (m Model) tileGone(i int) (Model, tea.Cmd) {
 	t := m.focus.tiles[i]
 	if t.shell {
-		for _, s := range m.sessions {
-			if sessionKey(s) == t.key {
-				m.focus.active = i
-				m.statusNote = "shell closed"
-				return m.showInTile(s, agentTarget(s), false)
-			}
+		if s, ok := m.sessionFor(t.key); ok {
+			m.statusNote = "shell closed"
+			return m.showInTileAt(i, s, agentTarget(s), false)
 		}
 	}
 	m.statusNote = fmt.Sprintf("%s has exited", t.name)
@@ -667,9 +697,8 @@ func (m Model) tileGone(i int) (Model, tea.Cmd) {
 		m.releaseFocus()
 		return m, doScan(m.statesDir)
 	}
-	m.focus.active = i
-	m, _ = m.closeTile()
-	return m, doScan(m.statesDir)
+	m, cmd := m.closeTileAt(i)
+	return m, tea.Batch(cmd, doScan(m.statesDir))
 }
 
 // sameScreen reports whether two captures would draw identically.

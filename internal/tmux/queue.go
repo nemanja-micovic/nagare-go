@@ -97,6 +97,13 @@ func (q *Queue) Capture(target string, scroll, height int) (Screen, error) {
 	return r.sc, r.err
 }
 
+// CaptureNow snapshots a pane on the calling goroutine. It must only be called
+// from inside a Do job, where it is already on the worker; anywhere else it
+// would race the queue.
+func (q *Queue) CaptureNow(target string, scroll, height int) (Screen, error) {
+	return snapshot(q.run, target, scroll, height)
+}
+
 // Run runs one tmux command on the worker and waits for its output.
 func (q *Queue) Run(args ...string) (string, error) {
 	type result struct {

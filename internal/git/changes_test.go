@@ -36,7 +36,7 @@ func TestChanges(t *testing.T) {
 	os.Remove(filepath.Join(dir, "gone.go"))
 	gitIn(t, dir, "mv", "old.go", "renamed.go")
 
-	got, err := Changes(dir)
+	_, got, err := Changes(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,37 @@ func TestWorktreesDoNotPolluteTheMainCheckout(t *testing.T) {
 	if strings.Count(string(exclude), "/.worktrees/") != 1 {
 		t.Errorf("exclude file should carry the pattern exactly once:\n%s", exclude)
 	}
-	if changes, _ := Changes(dir); len(changes) != 0 {
+	if _, changes, _ := Changes(dir); len(changes) != 0 {
 		t.Errorf("review lists %+v in a clean main checkout", changes)
+	}
+}
+
+// TestChangesFromASubdirectory — an agent working in a subdirectory of the
+// repository still sees its changes, with diffs that resolve.
+func TestChangesFromASubdirectory(t *testing.T) {
+	dir := t.TempDir()
+	gitIn(t, dir, "init", "-q", "-b", "main")
+	os.MkdirAll(filepath.Join(dir, "packages", "web"), 0o755)
+	os.WriteFile(filepath.Join(dir, "packages", "web", "a.ts"), []byte("a\n"), 0o644)
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "-q", "-m", "init")
+	os.WriteFile(filepath.Join(dir, "packages", "web", "a.ts"), []byte("a\nb\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "packages", "web", "new.ts"), []byte("1\n2\n"), 0o644)
+
+	root, changes, err := Changes(filepath.Join(dir, "packages", "web"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 2 {
+		t.Fatalf("changes = %+v", changes)
+	}
+	for _, c := range changes {
+		d, err := FileDiff(root, c)
+		if err != nil || !strings.Contains(d, "+") {
+			t.Errorf("diff of %s from a subdirectory = %q, %v", c.Path, d, err)
+		}
+		if c.Untracked && c.Added != 2 {
+			t.Errorf("untracked %s counted +%d, want +2", c.Path, c.Added)
+		}
 	}
 }

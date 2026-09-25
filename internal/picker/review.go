@@ -22,7 +22,8 @@ import (
 
 type reviewState struct {
 	open    bool
-	dir     string
+	dir     string // the agent's directory
+	root    string // its repository's top level; file paths are relative to it
 	title   string
 	files   []git.Change
 	sel     int
@@ -37,6 +38,7 @@ type reviewState struct {
 type (
 	reviewFilesMsg struct {
 		gen   int
+		root  string
 		files []git.Change
 		err   error
 	}
@@ -73,8 +75,8 @@ func (m Model) openReview(s models.Session) (Model, tea.Cmd) {
 
 func loadReviewFiles(dir string, gen int) tea.Cmd {
 	return func() tea.Msg {
-		files, err := git.Changes(dir)
-		return reviewFilesMsg{gen: gen, files: files, err: err}
+		root, files, err := git.Changes(dir)
+		return reviewFilesMsg{gen: gen, root: root, files: files, err: err}
 	}
 }
 
@@ -103,7 +105,10 @@ func (m Model) updateReview(msg tea.Msg) (Model, tea.Cmd) {
 		if r.sel < len(r.files) {
 			prev = r.files[r.sel].Path
 		}
-		r.files, r.sel = msg.files, 0
+		r.root, r.files, r.sel = msg.root, msg.files, 0
+		// The file may have changed even if the selection did not: a refresh
+		// always reloads the diff.
+		r.diffFor = ""
 		for i, f := range r.files {
 			if f.Path == prev {
 				r.sel = i
@@ -144,7 +149,7 @@ func (m *Model) reviewSelect(i int) tea.Cmd {
 	}
 	r.sel, r.scroll = i, 0
 	r.gen++
-	return loadReviewDiff(r.dir, r.files[i], r.gen)
+	return loadReviewDiff(r.root, r.files[i], r.gen)
 }
 
 // cleanDiff drops git's per-file preamble — the file is already named in the
@@ -196,7 +201,7 @@ func (m Model) handleReviewKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, loadReviewFiles(r.dir, r.gen)
 	case keyEnter, "e":
 		if r.sel < len(r.files) {
-			c := exec.Command(resolveEditor(), filepath.Join(r.dir, r.files[r.sel].Path))
+			c := exec.Command(resolveEditor(), filepath.Join(r.root, r.files[r.sel].Path))
 			return m, tea.ExecProcess(c, func(error) tea.Msg { return reviewEditDoneMsg{} })
 		}
 	}

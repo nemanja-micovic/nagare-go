@@ -4,6 +4,8 @@ import (
 	"os"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/paths"
 )
@@ -44,20 +46,29 @@ func TestLayoutRoundTrip(t *testing.T) {
 	}
 }
 
-// TestLayoutForgottenFromTheList — quitting from the list means the list is
-// where the user wanted to be.
-func TestLayoutForgottenFromTheList(t *testing.T) {
+// TestLayoutRememberedWhenLeavingFocus — focus mode has no quit key, so the
+// usual way out is Ctrl+] then Esc; the layout must survive that.
+func TestLayoutRememberedWhenLeavingFocus(t *testing.T) {
 	t.Setenv(paths.DataDirEnv, t.TempDir())
 	m, _ := splitModel(t, 200, 50, 3, 2)
 	m.restoreEnabled = true
-	m.saveLayout()
-	if loadLayout() == nil {
-		t.Fatal("layout not saved from focus mode")
+	m = driveModel(t, m, tea.KeyPressMsg{Code: ']', Mod: tea.ModCtrl})
+	m.Close()
+	if l := loadLayout(); l == nil || len(l.Tiles) != 2 {
+		t.Fatalf("layout after Ctrl+] and quit = %+v, want 2 tiles", l)
 	}
-	m = m.leaveFocus()
+}
+
+// TestLayoutForgottenWhenLastTileCloses — closing the last tile is the
+// deliberate "done".
+func TestLayoutForgottenWhenLastTileCloses(t *testing.T) {
+	t.Setenv(paths.DataDirEnv, t.TempDir())
+	m, _ := splitModel(t, 200, 50, 3, 1)
+	m.restoreEnabled = true
 	m.saveLayout()
+	m = driveModel(t, m, tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt})
 	if _, err := os.Stat(layoutPath()); !os.IsNotExist(err) {
-		t.Error("layout survived quitting from the list")
+		t.Error("layout survived closing the last tile")
 	}
 }
 
@@ -65,9 +76,38 @@ func TestLayoutForgottenFromTheList(t *testing.T) {
 // dropped, and with none left nagare starts on the list.
 func TestLayoutSkipsAgentsThatAreGone(t *testing.T) {
 	m := newVisualModel(t, 200, 50)
-	m.restore = &savedLayout{Tiles: []savedTile{{Pane: "%999", Key: "gone:0.0"}}}
+	m.restore = &savedLayout{Tiles: []savedTile{{Pane: "%999", Session: "gone", Agent: "claude"}}}
 	m = driveModel(t, m, SessionsUpdatedMsg(append([]models.Session(nil), m.sessions...)))
 	if m.focus.on || m.restore != nil {
 		t.Errorf("focus on=%v restore=%v; want the list and the layout consumed", m.focus.on, m.restore)
+	}
+}
+
+// TestLayoutRejectsReusedPaneID — after a tmux restart a saved pane id can
+// belong to a different agent; it must not be reopened as if it were the same.
+func TestLayoutRejectsReusedPaneID(t *testing.T) {
+	m, _ := splitModel(t, 200, 50, 3, 1)
+	m = m.leaveFocus()
+	s := m.sessions[0]
+	m.restore = &savedLayout{Tiles: []savedTile{{Pane: s.PaneID, Session: "some-other-repo", Agent: string(s.AgentType)}}}
+	m = driveModel(t, m, SessionsUpdatedMsg(append([]models.Session(nil), m.sessions...)))
+	if m.focus.on {
+		t.Error("a pane id now in another session was restored")
+	}
+}
+
+// TestLayoutActiveMapsAfterSkip — the saved active index refers to the saved
+// tiles; when one before it is skipped, the right agent still gets the keyboard.
+func TestLayoutActiveMapsAfterSkip(t *testing.T) {
+	m, _ := splitModel(t, 240, 60, 4, 1)
+	m = m.leaveFocus()
+	a, b := m.sessions[0], m.sessions[1]
+	tile := func(s models.Session) savedTile {
+		return savedTile{Pane: s.PaneID, Session: s.SessionName, Agent: string(s.AgentType)}
+	}
+	m.restore = &savedLayout{Active: 2, Tiles: []savedTile{tile(a), {Pane: "%404", Session: "x", Agent: "claude"}, tile(b)}}
+	m = driveModel(t, m, SessionsUpdatedMsg(append([]models.Session(nil), m.sessions...)))
+	if m.focus.n != 2 || m.focus.cur().key != sessionKey(b) {
+		t.Errorf("n=%d active=%q; want 2 tiles with %q active", m.focus.n, m.focus.cur().key, sessionKey(b))
 	}
 }

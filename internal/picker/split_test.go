@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/nemke/nagare-go/internal/models"
 	"github.com/nemke/nagare-go/internal/theme"
 	"github.com/nemke/nagare-go/internal/tmux"
 )
@@ -320,5 +321,75 @@ func BenchmarkViewFocusSplit4(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = m.View()
+	}
+}
+
+// runsPoll executes a command tree and reports whether it schedules the poll
+// loop with the model's current sequence number.
+func runsPoll(cmd tea.Cmd, seq int) bool {
+	if cmd == nil {
+		return false
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			if runsPoll(c, seq) {
+				return true
+			}
+		}
+	case focusTickMsg:
+		return msg.seq == seq
+	case focusSnapMsg:
+		return msg.seq == seq
+	}
+	return false
+}
+
+// TestTileExitKeepsPollingAndKeyboard — an agent exiting in a background tile
+// must neither stop the poll loop for the others nor move the keyboard off the
+// tile the user is typing into.
+func TestTileExitKeepsPollingAndKeyboard(t *testing.T) {
+	m, _ := splitModel(t, 240, 60, 5, 3)
+	m, _ = m.activateTile(0)
+	typing := m.focus.cur().key
+	gone := m.focus.tiles[2].pane
+
+	next, cmd := m.Update(focusSnapMsg{seq: m.focus.seq, n: 1000, snaps: []tileSnap{{pane: gone, err: tmux.ErrPaneGone}}})
+	m = next.(Model)
+	if m.focus.n != 2 {
+		t.Fatalf("%d tiles, want 2", m.focus.n)
+	}
+	if m.focus.cur().key != typing {
+		t.Errorf("keyboard moved to %q after a background exit; want %q", m.focus.cur().key, typing)
+	}
+	if !runsPoll(cmd, m.focus.seq) {
+		t.Error("the poll loop was not rescheduled after the tile closed")
+	}
+}
+
+// TestStaleSnapOfCurrentLoopReschedules — a reply numbered older than what is
+// on screen is not applied, but if it belongs to the current loop, the loop
+// still has to continue.
+func TestStaleSnapOfCurrentLoopReschedules(t *testing.T) {
+	m, _ := splitModel(t, 200, 50, 3, 1)
+	m.focus.applied = 50
+	next, cmd := m.Update(focusSnapMsg{seq: m.focus.seq, n: 10, snaps: []tileSnap{{pane: m.focus.cur().pane, screen: agentScreen(10, 3)}}})
+	m = next.(Model)
+	if !runsPoll(cmd, m.focus.seq) {
+		t.Error("a stale reply from the current loop ended polling")
+	}
+	if m.focus.applied != 50 {
+		t.Error("a stale reply was applied")
+	}
+}
+
+// TestSessionKeySurvivesRenumbering — keys are pane ids, so a window renumber
+// does not make a tile name a different agent.
+func TestSessionKeySurvivesRenumbering(t *testing.T) {
+	a := models.Session{SessionName: "s", WindowIndex: 2, PaneID: "%7"}
+	b := a
+	b.WindowIndex = 1
+	if sessionKey(a) != sessionKey(b) {
+		t.Error("the key changed when the window was renumbered")
 	}
 }

@@ -232,9 +232,17 @@ func approvable(status models.SessionStatus) bool {
 
 // sessionKey returns a stable identifier for a session. The cursor tracks this
 // key across re-filters so the selection follows the session, not the index.
+//
+// The pane id comes first: it is unique on the server and survives window
+// renumbering, where the positional session:window.pane would silently start
+// naming a different agent — a tile would then review, shell into and jump to
+// the wrong one.
 func sessionKey(s models.Session) string {
 	if s.Status == models.StatusSaved {
 		return "saved:" + s.Name
+	}
+	if s.PaneID != "" {
+		return s.PaneID
 	}
 	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
 }
@@ -331,9 +339,13 @@ func (m Model) Init() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(
-		// Windows a crashed run left fitted to its own size go back to tmux.
-		func() tea.Msg { tmux.ReleaseStaleWindows(); return nil },
-		doScan(m.statesDir),
+		// Windows a crashed run left fitted to its own size go back to tmux —
+		// before the first scan, whose layout restore may fit those very windows
+		// again and must not have them unpinned underneath it.
+		tea.Sequence(
+			func() tea.Msg { tmux.ReleaseStaleWindows(); return nil },
+			doScan(m.statesDir),
+		),
 		doPreviewTick(),
 		doBreathTick(),
 	)
@@ -511,16 +523,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.focus.on {
 			m.selectKey(m.focus.cur().key)
 		}
-		var focusCmd tea.Cmd
-		m, focusCmd = m.resolvePendingFocus()
+		// Each of these can open a tile; all of their commands have to run, or a
+		// tile's poll loop never starts.
+		var pendingCmd, restoreCmd, openedCmd tea.Cmd
+		m, pendingCmd = m.resolvePendingFocus()
 		if m.restore != nil {
-			m, focusCmd = m.restoreLayout()
+			m, restoreCmd = m.restoreLayout()
 		}
 		// A worktree the user just asked for opens like a new session does:
 		// they made it to work in it.
 		if opened != nil && !m.enterJumps {
-			m, focusCmd = m.enterFocus(*opened)
+			m, openedCmd = m.enterFocus(*opened)
 		}
+		focusCmd := tea.Batch(pendingCmd, restoreCmd, openedCmd)
 		if m.testNoScan {
 			return m, focusCmd
 		}

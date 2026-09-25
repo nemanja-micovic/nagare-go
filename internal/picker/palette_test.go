@@ -141,3 +141,16 @@ func TestReviewNavigationAndFrame(t *testing.T) {
 		t.Error("Esc did not close the review")
 	}
 }
+
+// TestReviewRefreshReloadsTheDiff — after a refresh (or returning from the
+// editor) the selected file's diff is fetched again, even though the
+// selection did not change: the file itself may have.
+func TestReviewRefreshReloadsTheDiff(t *testing.T) {
+	m := newVisualModel(t, 160, 40)
+	files := []git.Change{{Path: "a.go", Status: " M", Added: 1}}
+	m.review = reviewState{open: true, dir: "/r", root: "/r", files: files, diff: []string{"old"}, diffFor: "a.go", gen: 3}
+	next, cmd := m.updateReview(reviewFilesMsg{gen: 3, root: "/r", files: files})
+	if cmd == nil || next.review.diffFor != "" {
+		t.Errorf("refresh kept the old diff (reload=%v, diffFor=%q)", cmd != nil, next.review.diffFor)
+	}
+}

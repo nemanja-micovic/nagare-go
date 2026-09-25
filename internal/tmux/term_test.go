@@ -1,6 +1,10 @@
 package tmux
 
-import "testing"
+import (
+	"os"
+	"strconv"
+	"testing"
+)
 
 func TestParseScreen(t *testing.T) {
 	out := "\x1b[1mhello\x1b[0m\nworld\n\n3 1 1 80 3 120 0 2\n"
@@ -24,5 +28,17 @@ func TestParseScreenRejectsGarbage(t *testing.T) {
 		if _, err := parseScreen(out); err == nil {
 			t.Errorf("parseScreen(%q) accepted malformed geometry", out)
 		}
+	}
+}
+
+func TestMarkIsStale(t *testing.T) {
+	if !markIsStale("1") {
+		t.Error("a legacy mark with no owner should be stale")
+	}
+	if !markIsStale("999999999") {
+		t.Error("a mark whose owner does not exist should be stale")
+	}
+	if markIsStale(strconv.Itoa(os.Getpid())) {
+		t.Error("this process's own mark was judged stale")
 	}
 }
