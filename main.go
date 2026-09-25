@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/pprof"
 	"syscall"
 
 	tea "charm.land/bubbletea/v2"
@@ -36,6 +37,15 @@ func main() {
 
 	log.Init()
 	defer log.Close()
+
+	// NAGARE_CPUPROFILE=path writes a CPU profile of the whole run, for
+	// performance work: go tool pprof nagare-go path.
+	if path := os.Getenv("NAGARE_CPUPROFILE"); path != "" {
+		if f, err := os.Create(path); err == nil {
+			pprof.StartCPUProfile(f)
+			defer pprof.StopCPUProfile()
+		}
+	}
 
 	// Load theme from config
 	cfg, _ := config.Load()

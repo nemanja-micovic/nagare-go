@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"image"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,7 +51,14 @@ type SessionsUpdatedMsg []models.Session
 type PreviewUpdatedMsg string
 
 type tickScanMsg struct{}
-type tickPreviewMsg struct{}
+type tickPreviewMsg struct{ seq int }
+
+// previewLoopMsg is the preview loop's fetch result: a PreviewUpdatedMsg or a
+// gridPreviewsMsg, tagged with the loop it belongs to.
+type previewLoopMsg struct {
+	seq int
+	msg tea.Msg
+}
 type gridPreviewsMsg map[string]string
 
 // Picker exit actions.
@@ -74,6 +82,8 @@ type Model struct {
 	viewMode        ViewMode
 	sortMode        SortMode
 	preview         string
+	previewDelay    time.Duration // next preview refresh; grows while the preview is unchanged
+	previewSeq      int           // token of the one live preview loop
 	width           int
 	height          int
 	statesDir       string
@@ -351,7 +361,7 @@ func (m Model) Init() tea.Cmd {
 			func() tea.Msg { tmux.ReleaseStaleWindows(); return nil },
 			doScan(m.statesDir),
 		),
-		doPreviewTick(),
+		m.previewTick(previewFastPoll),
 		doBreathTick(),
 	)
 }
@@ -558,22 +568,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
-		return m, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+		return m, nil
 
 	case gridPreviewsMsg:
 		m.gridPreviews = map[string]string(msg)
-		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+		return m, nil
 
 	case tickScanMsg:
 		return m, doScan(m.statesDir)
 
 	case tickPreviewMsg:
-		if m.focus.on {
-			// The focus loop is already capturing the one pane on screen; keep
-			// the preview clock alive, idle, for when the list comes back.
-			return m, doPreviewTick()
+		// Exactly one preview loop runs. Navigation fetches a preview directly
+		// and schedules nothing; it used to schedule a tick of its own each
+		// time, so every cursor move added a loop that never ended.
+		if msg.seq != m.previewSeq {
+			return m, nil
 		}
-		return m, m.doPreview()
+		if m.focus.on {
+			// The focus loop is already capturing what is on screen; keep this
+			// clock alive, idle, for when the list comes back.
+			return m, m.previewTick(previewSlowPoll)
+		}
+		fetch, seq := m.doPreview(), msg.seq
+		return m, func() tea.Msg { return previewLoopMsg{seq: seq, msg: fetch()} }
+
+	case previewLoopMsg:
+		if msg.seq != m.previewSeq {
+			return m, nil
+		}
+		// Back off while the preview is unchanged — every refresh is a full
+		// frame, and an idle agent's preview was most of an idle list's cost.
+		changed := true
+		switch inner := msg.msg.(type) {
+		case PreviewUpdatedMsg:
+			changed = string(inner) != m.preview
+			m.preview = string(inner)
+		case gridPreviewsMsg:
+			changed = !maps.Equal(map[string]string(inner), m.gridPreviews)
+			m.gridPreviews = map[string]string(inner)
+		}
+		base := previewFastPoll
+		if m.viewMode == GridView {
+			base = gridPreviewPoll
+		}
+		if changed || m.previewDelay < base {
+			m.previewDelay = base
+		} else {
+			m.previewDelay = min(m.previewDelay*2, previewSlowPoll)
+		}
+		return m, m.previewTick(m.previewDelay)
 
 	case tickBreathMsg:
 		// One clock drives both the breath and any fading rows. It stops when
@@ -626,6 +669,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if updated.startSlide(prevCursor, prevLen) {
 			cmds = append(cmds, doAnimTick())
+		}
+		// A new selection restarts the preview loop at its fast rate: the loop
+		// may be backed off from watching an idle agent.
+		if updated.cursor != prevCursor && !updated.focus.on {
+			cmds = append(cmds, updated.restartPreview())
 		}
 		return updated, tea.Batch(cmds...)
 
@@ -1303,8 +1351,26 @@ func doScan(statesDir string) tea.Cmd {
 	}
 }
 
-func doPreviewTick() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+// Preview refresh bounds: fast while the previewed pane changes, backing off
+// to previewSlowPoll while it does not.
+const (
+	previewFastPoll = 200 * time.Millisecond
+	gridPreviewPoll = 500 * time.Millisecond
+	previewSlowPoll = 1500 * time.Millisecond
+)
+
+// restartPreview retires the running preview loop and starts a fresh one at
+// the fast rate.
+func (m *Model) restartPreview() tea.Cmd {
+	m.previewSeq++
+	m.previewDelay = previewFastPoll
+	return m.previewTick(previewFastPoll)
+}
+
+// previewTick schedules the preview loop's next refresh.
+func (m Model) previewTick(d time.Duration) tea.Cmd {
+	seq := m.previewSeq
+	return tea.Tick(d, func(time.Time) tea.Msg { return tickPreviewMsg{seq: seq} })
 }
 
 func (m Model) doPreview() tea.Cmd {

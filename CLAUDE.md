@@ -587,6 +587,21 @@ before a keypress and one is open after, so a new overlay cannot forget to anima
 `overlayRect` and `placeOverlay` both take the animated offset, so a click lands on
 the dialog where it currently appears rather than where it will rest.
 
+### Preview loop
+
+Exactly one preview loop runs, owned by `previewSeq`. Navigation fetches a
+preview directly (`doPreview` → `PreviewUpdatedMsg`) and schedules nothing; it
+used to schedule a refresh of its own, so **every cursor move added a polling loop
+that never ended** — after 40 moves over four idle agents the picker burned 131%
+of a core. Moving the cursor now retires the loop and starts a fresh one
+(`restartPreview`). The loop backs off while the preview is unchanged (200ms →
+1.5s; grid 500ms → 1.5s), since every refresh is a full frame; the same scenario
+now costs 2.6%. `NAGARE_CPUPROFILE=path` writes a CPU profile of a run — that is
+how this was found.
+
+The scanner reuses each directory's git facts for `repoTTL` (6s) instead of
+forking `git rev-parse` per agent every two-second scan.
+
 ### Help overlay
 
 Two columns, sized to its content and capped to the frame, not to a fraction of the
