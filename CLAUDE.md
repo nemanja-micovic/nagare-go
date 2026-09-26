@@ -103,6 +103,9 @@ install spec in `docs/nvim.md`. Requires Neovim 0.10+.
 - CI loop polls `gh` only while an agent has an open PR (`ci.lua`); `config.gh` is swappable
   for tests.
 - Snacks picker keys must avoid snacks' defaults (`<c-n>`, `<c-p>`, `<c-a>`… taken).
+- Logo (`logo.lua`): text mark in the board title and on an empty board; `:Nagare logo`
+  uses snacks.image for the real JPG only when `Snacks.image.supports` says so. Never
+  set the user's dashboard header — `logo.header()` is opt-in.
 - Board: one key table drives maps (with desc), hint line and `g?` help; hint line trimmed
   in drop order with `q close` reserved; highlights via extmarks; `board_spec` checks every
   line fits. Floats over the board must not close it.

@@ -70,6 +70,7 @@ local function highlights()
   for kind, spec in pairs(config.agents) do
     api.nvim_set_hl(0, "NagareAgent_" .. kind, { fg = spec.color, bold = true, default = true })
   end
+  require("nagare.logo").highlights()
 end
 
 function M.sigil(kind)

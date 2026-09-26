@@ -36,6 +36,7 @@ M.subcommands = {
   next = { impl = function() nagare().next_waiting() end },
   peek = { impl = function() nagare().peek() end },
   toggle = { impl = function() nagare().toggle() end },
+  logo = { impl = function() require("nagare.logo").show() end },
   new = {
     impl = function(args)
       local util = require("nagare.util")

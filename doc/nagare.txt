@@ -50,6 +50,10 @@ COMMANDS                                                     *:Nagare*
 :Nagare next                 Jump to the next waiting agent, wrapping.
 :Nagare peek                 Most urgent agent in a float.
 :Nagare toggle               Show/hide this project's agent split.
+:Nagare logo                 Show the nagare logo: the real image through
+                             snacks.image in a kitty-graphics terminal
+                             (kitty, ghostty, wezterm), the text mark
+                             elsewhere.
 :Nagare project [dir]        Open a project in its tab.
 :[range]Nagare send [text]   Send "@file#Lx-y text" to the project's agent.
 :Nagare rename {name}        Rename the agent whose terminal you are in.
@@ -158,5 +162,13 @@ Highlights (linked to Diagnostic* and float groups by default):
 NagareWaiting NagareRunning NagareIdle NagareDead NagareSaved NagareProject
 NagareDim NagareNormal NagareBorder NagareTitle NagareKey NagareSlot
 NagareTmux NagareAgent_{agent}
+Logo (own colours, dark/light variants, all `default`):
+NagareLogoStream1..5 NagareLogoBracket NagareLogoWord NagareLogoChevron
+
+The logo as a dashboard header (LazyVim's snacks dashboard): >lua
+  { "folke/snacks.nvim", opts = function(_, opts)
+      opts.dashboard.preset.header = require("nagare.logo").header()
+  end }
+<
 
  vim:tw=78:ts=8:ft=help:norl:

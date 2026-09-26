@@ -175,6 +175,19 @@ nagare and sidekick don't clash: sidekick uses `<leader>a`, nagare uses `<leader
 - **Picker**: the same list, fuzzy, in snacks' picker, with a live preview of each agent's
   screen.
 
+## Brand
+
+The logo lives in the editor as text, so it shows in every terminal: five agent
+streams flowing into `[nagare]❯`, in the image's own teal → violet → magenta
+(`lua/nagare/logo.lua`, with darker twins on a light background). It titles the
+board window and fills an empty board, which is the first thing a new user
+opens; once there is an agent the board is all work and the logo gets out of the
+way. `:Nagare logo` shows the real `images/nagare-logo-glowing.jpg` through
+snacks.image when the terminal speaks the kitty graphics protocol (needs
+ImageMagick for the JPEG), the text mark otherwise. `logo.header()` is a
+dashboard header for anyone who wants it on their start screen; nagare does not
+set it itself, since a dashboard belongs to the user.
+
 ## Notifications
 
 LazyVim's toasts come from the snacks.nvim notifier, and nagare is designed around it:

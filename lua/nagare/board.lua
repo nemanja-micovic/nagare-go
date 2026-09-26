@@ -279,7 +279,8 @@ function M.build(width)
   local lines, rows = {}, {}
 
   local counts = nagare.summary()
-  local head = line():add(" nagare ", "NagareTitle")
+  -- The window title carries the name; the head line is the live summary.
+  local head = line():add(" ")
   for _, s in ipairs({ "waiting_input", "review", "running", "idle", "saved" }) do
     if counts[s] > 0 then
       local icon = s == "review" and nagare.review_icon or nagare.status_icon[s]
@@ -291,11 +292,34 @@ function M.build(width)
   if spent > 0 then
     head:add(("  $%.2f"):format(spent), "NagareDim")
   end
+  local total = 0
+  for _, g in ipairs(groups) do
+    total = total + #g.entries
+  end
   if #groups == 0 then
-    head:add("  no agents yet — a starts one here, o opens a project", "NagareDim")
+    head:add(" no agents yet — a starts one here, o opens a project", "NagareDim")
   end
   table.insert(lines, head)
   table.insert(lines, line())
+
+  -- First run (or everything cleaned up): greet with the mark rather than an
+  -- empty box.
+  if total == 0 then
+    local logo = require("nagare.logo")
+    local indent = (" "):rep(math.max(math.floor((width - logo.width) / 2), 0))
+    for _, row in ipairs(logo.rows()) do
+      local l = line():add(indent)
+      for _, chunk in ipairs(row) do
+        l:add(chunk[1], chunk[2])
+      end
+      table.insert(lines, l)
+    end
+    local tagline = "every agent, every project, one editor"
+    local pad = (" "):rep(math.max(math.floor((width - vim.fn.strdisplaywidth(tagline)) / 2), 0))
+    table.insert(lines, line())
+    table.insert(lines, line():add(pad .. tagline, "NagareDim"))
+    table.insert(lines, line())
+  end
 
   -- Columns: slot, icon, sigil, name, status, age, message, branch.
   local name_w = math.max(math.min(24, math.floor(width * 0.26)), 10)
@@ -533,12 +557,12 @@ function M.open()
   local win = api.nvim_open_win(buf, true, {
     relative = "editor", width = 60, height = 3, row = 2, col = 2,
     style = "minimal", border = border(), zindex = 50,
-    title = " agents ", title_pos = "center",
+    title = require("nagare.logo").title(), title_pos = "center",
   })
   vim.wo[win].cursorline = true
   vim.wo[win].wrap = false
   vim.wo[win].winfixbuf = true
-  vim.wo[win].winhighlight = "NormalFloat:NagareNormal,FloatBorder:NagareBorder,FloatTitle:NagareTitle"
+  vim.wo[win].winhighlight = "NormalFloat:NagareNormal,FloatBorder:NagareBorder"
   state = { buf = buf, win = win, rows = {} }
 
   local opts = { buffer = buf, nowait = true, silent = true }
