@@ -143,12 +143,16 @@ func killTarget(s models.Session, sessions []models.Session) (string, bool) {
 // bare worktree — matching only the label would let that case slip through.
 //
 // Plain sessions are the opposite case: their branch (feat/foo, fix/bar) cannot
-// be guessed from the name, and showing it is the entire point.
+// be guessed from the name, and showing it is the entire point — unless it is
+// the default branch, which is what a row without one is taken to be on.
 func branchFor(label, worktree, branch string) string {
 	if branch == "" {
 		return ""
 	}
-	for _, redundant := range []string{label, worktree, "worktree-" + label, "worktree-" + worktree} {
+	// The default branch says nothing: on a row that is working on main, the
+	// absence of a branch is the information. Showing it cost every such row
+	// the columns its own name needed.
+	for _, redundant := range []string{label, worktree, "worktree-" + label, "worktree-" + worktree, "main", "master"} {
 		if branch == redundant {
 			return ""
 		}

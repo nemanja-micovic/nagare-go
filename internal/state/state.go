@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"github.com/nemke/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,8 +13,7 @@ import (
 
 // DefaultStatesDir returns the default states directory path.
 func DefaultStatesDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "nagare", "states")
+	return filepath.Join(paths.Data(), "states")
 }
 
 // LoadAllStates loads all state files from dir, keyed by cwd.

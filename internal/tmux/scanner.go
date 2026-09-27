@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/models"
@@ -277,15 +279,7 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 	allPanes := ParseAllPanes(rawPanes)
 
 	var result []models.Session
-	repos := make(map[string]git.Repo) // one git call per unique directory per scan
-	describe := func(dir string) git.Repo {
-		if r, ok := repos[dir]; ok {
-			return r
-		}
-		r := git.Describe(dir)
-		repos[dir] = r
-		return r
-	}
+	describe := describeCached
 
 	for _, sess := range sessions {
 		panes, ok := allPanes[sess.Name]
@@ -362,4 +356,42 @@ func ScanSessions(paneStates map[string]models.SessionState, cwdStates map[strin
 		}
 	}
 	return result
+}
+
+// repoTTL is how long a directory's git facts are reused across scans. A scan
+// runs every two seconds, and forking git for every agent's directory each time
+// was most of what an idle nagare spent; a branch switch showing a few seconds
+// late costs nothing.
+const repoTTL = 6 * time.Second
+
+var repoCache = struct {
+	sync.Mutex
+	m map[string]cachedRepo
+}{m: map[string]cachedRepo{}}
+
+type cachedRepo struct {
+	repo git.Repo
+	at   time.Time
+}
+
+// describeCached is git.Describe, reused for repoTTL per directory.
+func describeCached(dir string) git.Repo {
+	now := time.Now()
+	repoCache.Lock()
+	c, ok := repoCache.m[dir]
+	repoCache.Unlock()
+	if ok && now.Sub(c.at) < repoTTL {
+		return c.repo
+	}
+	r := git.Describe(dir)
+	repoCache.Lock()
+	repoCache.m[dir] = cachedRepo{repo: r, at: now}
+	// Directories come and go with agents; drop the ones long unused.
+	for d, e := range repoCache.m {
+		if now.Sub(e.at) > 10*repoTTL {
+			delete(repoCache.m, d)
+		}
+	}
+	repoCache.Unlock()
+	return r
 }

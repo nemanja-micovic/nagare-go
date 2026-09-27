@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"encoding/json"
+	"github.com/nemke/nagare-go/internal/paths"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,8 +29,7 @@ type Store struct {
 
 // DefaultStorePath returns the default notification store path.
 func DefaultStorePath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "share", "nagare", "notifications.json")
+	return filepath.Join(paths.Data(), "notifications.json")
 }
 
 // NewStore loads or creates a notification store.

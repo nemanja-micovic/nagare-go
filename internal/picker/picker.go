@@ -1,8 +1,10 @@
 package picker
 
 import (
+	"cmp"
 	"fmt"
 	"image"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/nemke/nagare-go/internal/board"
 	"github.com/nemke/nagare-go/internal/config"
+	"github.com/nemke/nagare-go/internal/demo"
 	"github.com/nemke/nagare-go/internal/git"
 	"github.com/nemke/nagare-go/internal/log"
 	"github.com/nemke/nagare-go/internal/models"
@@ -51,7 +54,14 @@ type SessionsUpdatedMsg []models.Session
 type PreviewUpdatedMsg string
 
 type tickScanMsg struct{}
-type tickPreviewMsg struct{}
+type tickPreviewMsg struct{ seq int }
+
+// previewLoopMsg is the preview loop's fetch result: a PreviewUpdatedMsg or a
+// gridPreviewsMsg, tagged with the loop it belongs to.
+type previewLoopMsg struct {
+	seq int
+	msg tea.Msg
+}
 type gridPreviewsMsg map[string]string
 
 // Picker exit actions.
@@ -71,58 +81,78 @@ type Result struct {
 
 // Model is the main Bubble Tea model for the picker TUI.
 type Model struct {
-	sessions      []models.Session
-	filtered      []models.Session
-	cursor        int
-	viewMode      ViewMode
-	sortMode      SortMode
-	preview       string
-	width         int
-	height        int
-	statesDir     string
-	searchInput   textinput.Model
-	showHelp      bool              // F1 help overlay
-	showHelpBar   bool              // bottom hint bar
-	showThemePick bool              // Ctrl+t theme picker overlay
-	themeNames    []string          // cached sorted theme names
-	themeCursor   int               // cursor in theme picker
-	themeOriginal string            // theme before opening picker (for cancel)
-	showSaved     bool              // show saved (unloaded) sessions
-	gridPreviews  map[string]string // cached grid cell previews keyed by pane target
-	ticketBoard   board.Model
-	registry      *state.Registry
-	renameMode    bool
-	renameSession models.Session
-	worktreeMode  bool
-	worktreeOn    models.Session
-	confirmMode   bool
-	confirmOn     models.Session
-	pending       *pendingWorktree // worktree being created, nil when idle
-	spinner       spinner.Model
-	statusErr     string              // last failure, shown until the next keypress
-	statusNote    string              // neutral message, shown until the next keypress
-	workCache     map[string]git.Work // outstanding work per path, refreshed each scan
-	result        Result
-	promptMode    bool
-	promptTarget  models.Session
-	promptInput   textinput.Model
-	noteMode      bool
-	noteTarget    models.Session
-	noteInput     textinput.Model
-	notes         *state.Notes
-	lastQuery     string   // previous search query, to detect query changes in applyFilter
-	gridOrder     []string // frozen display order for grid view (session keys); nil = not yet snapshotted
-	mouseEnabled  bool     // click-to-select and wheel scrolling (config: picker.mouse)
-	animEnabled   bool     // spring-animated overlay entry (config: picker.animations)
-	overlayAnim   overlayAnim
-	breath        float64                         // phase of the status-dot breath, 0..1
-	breathOn      bool                            // whether the breath clock is currently ticking
-	slide         selectionSlide                  // highlight crossfading between rows
-	arrived       string                          // worktree whose pane just appeared, to flash once it is listed
-	history       map[string][]uint8              // recent activity levels per session, for sparklines
-	flashes       map[string]flashState           // rows fading after a state change
-	prevStatus    map[string]models.SessionStatus // statuses at the last scan, to spot transitions
-	testNoScan    bool                            // test hook: disable the live tmux scanner (see export_test.go)
+	sessions        []models.Session
+	filtered        []models.Session
+	cursor          int
+	viewMode        ViewMode
+	sortMode        SortMode
+	preview         string
+	previewDelay    time.Duration // next preview refresh; grows while the preview is unchanged
+	previewSeq      int           // token of the one live preview loop
+	width           int
+	height          int
+	statesDir       string
+	searchInput     textinput.Model
+	showHelp        bool              // F1 help overlay
+	showHelpBar     bool              // bottom hint bar
+	showThemePick   bool              // Ctrl+t theme picker overlay
+	themeNames      []string          // cached sorted theme names
+	themeCursor     int               // cursor in theme picker
+	themeOriginal   string            // theme before opening picker (for cancel)
+	showSaved       bool              // show saved (unloaded) sessions
+	gridPreviews    map[string]string // cached grid cell previews keyed by pane target
+	ticketBoard     board.Model
+	registry        *state.Registry
+	renameMode      bool
+	renameSession   models.Session
+	worktreeMode    bool
+	worktreeOn      models.Session
+	confirmMode     bool
+	confirmOn       models.Session
+	pending         *pendingWorktree // worktree being created, nil when idle
+	spinner         spinner.Model
+	statusErr       string              // last failure, shown until the next keypress
+	statusNote      string              // neutral message, shown until the next keypress
+	workCache       map[string]git.Work // outstanding work per path, refreshed each scan
+	result          Result
+	promptMode      bool
+	promptTarget    models.Session
+	promptBroadcast bool // the prompt goes to every agent tile (Alt+b)
+	promptInput     textinput.Model
+	noteMode        bool
+	noteTarget      models.Session
+	noteInput       textinput.Model
+	notes           *state.Notes
+	lastQuery       string   // previous search query, to detect query changes in applyFilter
+	gridOrder       []string // frozen display order for grid view (session keys); nil = not yet snapshotted
+	mouseEnabled    bool     // click-to-select and wheel scrolling (config: picker.mouse)
+	animEnabled     bool     // spring-animated overlay entry (config: picker.animations)
+	overlayAnim     overlayAnim
+	breath          float64                         // phase of the status-dot breath, 0..1
+	breathOn        bool                            // whether the breath clock is currently ticking
+	slide           selectionSlide                  // highlight crossfading between rows
+	arrived         string                          // worktree whose pane just appeared, to flash once it is listed
+	history         map[string][]uint8              // recent activity levels per session, for sparklines
+	flashes         map[string]flashState           // rows fading after a state change
+	prevStatus      map[string]models.SessionStatus // statuses at the last scan, to spot transitions
+	testNoScan      bool                            // test hook: disable the live tmux scanner (see export_test.go)
+	focus           focusState                      // the agent terminal hosted in nagare (focus.go)
+	enterJumps      bool                            // Enter switches to tmux instead of focusing (picker.enter_action)
+	pendingFocus    string                          // tmux session to focus once an agent appears in it
+	pendingFocusBy  time.Time                       // when to stop waiting for pendingFocus
+	leaveKey        string                          // returns from focus mode (picker.focus_leave_key)
+	newQueue        func() *tmux.Queue              // where focus mode's tmux commands go; faked in tests
+	newWatcher      func() outputWatcher            // where output events come from; nil in tests
+	watcher         outputWatcher
+	watchLoop       bool          // the output-event loop is running
+	filterGen       int           // bumped whenever filtered is rebuilt
+	review          reviewState   // the changes panel (review.go)
+	palette         paletteState  // the command palette (palette.go)
+	restore         *savedLayout  // the layout to reopen after the first scan (layout.go)
+	restoreEnabled  bool          // picker.restore_layout
+	toasts          []toast       // notices about agents not on the keyboard (toast.go)
+	compactRows     bool          // rows rendered for the narrow focus-mode sidebar
+	sidebarCache    *sidebarCache // focus mode's last sidebar render
 }
 
 // New creates a new picker model with default settings.
@@ -148,22 +178,31 @@ func New() Model {
 
 	ticketStore := tickets.NewStore(tickets.DefaultDir())
 	return Model{
-		statesDir:    state.DefaultStatesDir(),
-		searchInput:  ti,
-		showHelpBar:  cfg.Picker.ShowHelpBar,
-		mouseEnabled: cfg.Picker.Mouse,
-		animEnabled:  cfg.Picker.Animations,
-		overlayAnim:  newOverlayAnim(),
-		registry:     state.NewRegistry(state.DefaultRegistryPath()),
-		promptInput:  pi,
-		noteInput:    ni,
-		notes:        state.NewNotes(state.DefaultNotesPath()),
-		workCache:    make(map[string]git.Work),
-		flashes:      make(map[string]flashState),
-		history:      make(map[string][]uint8),
-		prevStatus:   make(map[string]models.SessionStatus),
-		spinner:      newSpinner(),
-		ticketBoard:  board.NewDeferred(ticketStore),
+		statesDir:      state.DefaultStatesDir(),
+		searchInput:    ti,
+		showHelpBar:    cfg.Picker.ShowHelpBar,
+		mouseEnabled:   cfg.Picker.Mouse,
+		animEnabled:    cfg.Picker.Animations,
+		enterJumps:     cfg.Picker.EnterAction == config.EnterJump,
+		overlayAnim:    newOverlayAnim(),
+		registry:       state.NewRegistry(state.DefaultRegistryPath()),
+		promptInput:    pi,
+		noteInput:      ni,
+		notes:          state.NewNotes(state.DefaultNotesPath()),
+		workCache:      make(map[string]git.Work),
+		flashes:        make(map[string]flashState),
+		history:        make(map[string][]uint8),
+		prevStatus:     make(map[string]models.SessionStatus),
+		spinner:        newSpinner(),
+		ticketBoard:    board.NewDeferred(ticketStore),
+		sidebarCache:   &sidebarCache{},
+		newQueue:       tmux.NewQueue,
+		newWatcher:     defaultWatcher,
+		leaveKey:       cmp.Or(cfg.Picker.FocusLeaveKey, keyFocusLeave),
+		restoreEnabled: cfg.Picker.RestoreLayout,
+		restore:        loadLayoutIf(cfg.Picker.RestoreLayout),
+		// The demo introduces itself; the note clears on the first keypress.
+		statusNote: os.Getenv(demo.NoteEnv),
 	}
 }
 
@@ -204,6 +243,9 @@ func (m Model) activateSelected() (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
+	if !m.enterJumps {
+		return m.enterFocus(s)
+	}
 	if s.Status == models.StatusSaved {
 		agent := string(s.AgentType)
 		if agent == "" || agent == "unknown" {
@@ -234,9 +276,17 @@ func approvable(status models.SessionStatus) bool {
 
 // sessionKey returns a stable identifier for a session. The cursor tracks this
 // key across re-filters so the selection follows the session, not the index.
+//
+// The pane id comes first: it is unique on the server and survives window
+// renumbering, where the positional session:window.pane would silently start
+// naming a different agent — a tile would then review, shell into and jump to
+// the wrong one.
 func sessionKey(s models.Session) string {
 	if s.Status == models.StatusSaved {
 		return "saved:" + s.Name
+	}
+	if s.PaneID != "" {
+		return s.PaneID
 	}
 	return tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
 }
@@ -332,7 +382,18 @@ func (m Model) Init() tea.Cmd {
 	if m.testNoScan {
 		return nil
 	}
-	commands := []tea.Cmd{tea.RequestBackgroundColor, doScan(m.statesDir), doPreviewTick(), doBreathTick()}
+	commands := []tea.Cmd{
+		tea.RequestBackgroundColor,
+		// Windows a crashed run left fitted to its own size go back to tmux —
+		// before the first scan, whose layout restore may fit those very windows
+		// again and must not have them unpinned underneath it.
+		tea.Sequence(
+			func() tea.Msg { tmux.ReleaseStaleWindows(); return nil },
+			doScan(m.statesDir),
+		),
+		m.previewTick(previewFastPoll),
+		doBreathTick(),
+	}
 	if m.viewMode == BoardView {
 		commands = append(commands, m.ticketBoard.Init())
 	}
@@ -351,7 +412,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if next, _ := m.ticketBoard.Update(msg); next != nil {
 			m.ticketBoard = next.(board.Model)
 		}
+		// A focused agent is resized with nagare, so it keeps drawing for exactly
+		// the space it is shown in.
+		m.fitFocus(false)
 		return m, nil
+
+	case focusTickMsg, focusSnapMsg, attachDoneMsg:
+		return m.updateFocus(msg)
+
+	case paneOutputMsg:
+		return m.onPaneOutput(msg)
+
+	case reviewFilesMsg, reviewDiffMsg, reviewEditDoneMsg:
+		return m.updateReview(msg)
+
+	case tea.PasteMsg:
+		switch {
+		case m.palette.open:
+			var cmd tea.Cmd
+			m.palette.input, cmd = m.palette.input.Update(msg)
+			return m, cmd
+		case m.focus.on && !m.overlayOpen():
+			return m.pasteFocus(msg.Content)
+		case m.promptMode:
+			var cmd tea.Cmd
+			m.promptInput, cmd = m.promptInput.Update(msg)
+			return m, cmd
+		}
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		if !m.renameMode && !m.worktreeMode {
+			m.applyFilter()
+		}
+		return m, cmd
+
+	case mouseFocusMsg:
+		if msg.index < 0 || msg.index >= len(m.filtered) {
+			return m, nil
+		}
+		m.cursor = msg.index
+		return m.enterFocus(m.filtered[msg.index])
+
+	case mouseTermScrollMsg:
+		if !m.focus.on {
+			return m, nil
+		}
+		return m.scrollFocus(msg.tile, msg.delta)
+
+	case mouseTileMsg:
+		if !m.focus.on {
+			return m, nil
+		}
+		return m.activateTile(msg.tile)
 
 	case mouseSelectMsg:
 		if msg.index < 0 || msg.index >= len(m.filtered) {
@@ -374,6 +486,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.activateSelected()
 
 	case mouseDismissMsg:
+		m.review.open = false
+		m.palette.open = false
 		// Same semantics as Esc on each overlay: cancelling the theme picker
 		// restores the theme it was previewing over.
 		if m.showThemePick {
@@ -442,18 +556,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workCache = make(map[string]git.Work) // recompute work against the new scan
 		// Spot the transitions worth announcing before the new statuses overwrite
 		// the old ones.
-		for key, f := range detectFlashes(m.prevStatus, m.sessions) {
+		fresh := detectFlashes(m.prevStatus, m.sessions)
+		for key, f := range fresh {
 			m.flashes[key] = f
 		}
+		m.pushToasts(fresh, time.Now())
 		m.prevStatus = statusesOf(m.sessions)
 		recordActivity(m.history, m.sessions)
 		// A worktree that has just come up flashes like any other arrival worth
 		// noticing, reusing the same fade rather than inventing a second one.
+		var opened *models.Session
 		if m.arrived != "" {
 			for _, sess := range m.sessions {
 				if sess.Details.Worktree == m.arrived {
 					m.flashes[sessionKey(sess)] = flashState{kind: flashDone, level: 1}
 					m.arrived = ""
+					opened = &sess
 					break
 				}
 			}
@@ -461,31 +579,86 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mergeSavedSessions()
 		log.Debug("scan: %d sessions (%d saved)", len(m.sessions), m.countSaved())
 		m.applyFilter()
+		// The sidebar's selection is the focused agent, wherever the re-sort put it.
+		if m.focus.on {
+			m.selectKey(m.focus.cur().key)
+		}
+		// Each of these can open a tile; all of their commands have to run, or a
+		// tile's poll loop never starts.
+		var pendingCmd, restoreCmd, openedCmd tea.Cmd
+		m, pendingCmd = m.resolvePendingFocus()
+		if m.restore != nil {
+			m, restoreCmd = m.restoreLayout()
+		}
+		// A worktree the user just asked for opens like a new session does:
+		// they made it to work in it.
+		if opened != nil && !m.enterJumps {
+			m, openedCmd = m.enterFocus(*opened)
+		}
+		focusCmd := tea.Batch(pendingCmd, restoreCmd, openedCmd)
 		if m.testNoScan {
-			return m, nil
+			return m, focusCmd
 		}
 		next := tea.Tick(2*time.Second, func(time.Time) tea.Msg { return tickScanMsg{} })
 		// The clock stops itself when nothing is moving, so a scan that turns up
 		// activity — or starts a flash — has to start it again.
-		if !m.breathOn && (needsBreathing(m.filtered) || len(m.flashes) > 0) {
+		if !m.breathOn && (needsBreathing(m.filtered) || len(m.flashes) > 0 || len(m.toasts) > 0) {
 			m.breathOn = true
-			return m, tea.Batch(next, doBreathTick())
+			return m, tea.Batch(next, doBreathTick(), focusCmd)
 		}
-		return m, next
+		return m, tea.Batch(next, focusCmd)
 
 	case PreviewUpdatedMsg:
 		m.preview = string(msg)
-		return m, tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+		return m, nil
 
 	case gridPreviewsMsg:
 		m.gridPreviews = map[string]string(msg)
-		return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+		return m, nil
 
 	case tickScanMsg:
 		return m, doScan(m.statesDir)
 
 	case tickPreviewMsg:
-		return m, m.doPreview()
+		// Exactly one preview loop runs. Navigation fetches a preview directly
+		// and schedules nothing; it used to schedule a tick of its own each
+		// time, so every cursor move added a loop that never ended.
+		if msg.seq != m.previewSeq {
+			return m, nil
+		}
+		if m.focus.on {
+			// The focus loop is already capturing what is on screen; keep this
+			// clock alive, idle, for when the list comes back.
+			return m, m.previewTick(previewSlowPoll)
+		}
+		fetch, seq := m.doPreview(), msg.seq
+		return m, func() tea.Msg { return previewLoopMsg{seq: seq, msg: fetch()} }
+
+	case previewLoopMsg:
+		if msg.seq != m.previewSeq {
+			return m, nil
+		}
+		// Back off while the preview is unchanged — every refresh is a full
+		// frame, and an idle agent's preview was most of an idle list's cost.
+		changed := true
+		switch inner := msg.msg.(type) {
+		case PreviewUpdatedMsg:
+			changed = string(inner) != m.preview
+			m.preview = string(inner)
+		case gridPreviewsMsg:
+			changed = !maps.Equal(map[string]string(inner), m.gridPreviews)
+			m.gridPreviews = map[string]string(inner)
+		}
+		base := previewFastPoll
+		if m.viewMode == GridView {
+			base = gridPreviewPoll
+		}
+		if changed || m.previewDelay < base {
+			m.previewDelay = base
+		} else {
+			m.previewDelay = min(m.previewDelay*2, previewSlowPoll)
+		}
+		return m, m.previewTick(m.previewDelay)
 
 	case tickBreathMsg:
 		// One clock drives both the breath and any fading rows. It stops when
@@ -493,7 +666,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the scan handler restarts it as soon as something turns up.
 		fading := stepFlashes(m.flashes)
 		breathing := needsBreathing(m.filtered)
-		if !breathing && !fading {
+		m.toasts = pruneToasts(m.toasts, time.Now())
+		if !breathing && !fading && len(m.toasts) == 0 {
 			m.breath, m.breathOn = 0, false
 			return m, nil
 		}
@@ -558,6 +732,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if updated.startSlide(prevCursor, prevLen) {
 			cmds = append(cmds, doAnimTick())
+		}
+		// A new selection restarts the preview loop at its fast rate: the loop
+		// may be backed off from watching an idle agent.
+		if updated.cursor != prevCursor && !updated.focus.on {
+			cmds = append(cmds, updated.restartPreview())
 		}
 		return updated, tea.Batch(cmds...)
 
@@ -629,6 +808,7 @@ func (m Model) View() tea.View {
 	content = clampHeight(content, m.height)
 	v := tea.NewView(content)
 	v.AltScreen = true
+	v.Cursor = m.focusCursor()
 
 	if m.mouseEnabled {
 		// Cell motion, not all motion: it covers clicks, releases and the wheel
@@ -699,7 +879,9 @@ func (m Model) view() (string, hitTargets) {
 	}
 
 	var base string
-	if m.viewMode == GridView {
+	if m.focus.on {
+		base, hits = m.viewFocus()
+	} else if m.viewMode == GridView {
 		base, hits.cards = m.viewGrid(m.width, contentHeight)
 	} else {
 		leftOuter := m.width / 5
@@ -722,19 +904,28 @@ func (m Model) view() (string, hitTargets) {
 	overlay, dismissable := "", false
 	switch {
 	case m.showHelp:
-		overlay, dismissable = helpOverlay(m.width, m.height), true
+		overlay, dismissable = helpOverlayFor(m.width, m.height, keyLabel(m.leaveKeyOrDefault(), false)), true
 	case m.showThemePick:
 		overlay, dismissable = themePickOverlay(m.themeNames, m.themeCursor, m.width, m.height), true
 	case m.noteMode:
 		// Not dismissable: a half-typed note should not be thrown away by a
 		// stray click, same as the prompt and the confirm dialog.
 		overlay = m.renderNoteOverlay()
+	case m.review.open:
+		overlay, dismissable = m.renderReviewOverlay(), true
+	case m.palette.open:
+		overlay, dismissable = m.renderPaletteOverlay(), true
 	case m.promptMode:
 		// Not dismissable: a half-typed prompt should not be thrown away by a
 		// stray click, and neither should a pending destructive answer.
 		overlay = m.renderPromptOverlay()
 	case m.confirmMode:
 		overlay = m.renderConfirmOverlay()
+	}
+	// Toasts sit above the tiles but below any dialog, and only in focus mode:
+	// in the list, the row that flashes is already where the eye is.
+	if m.focus.on {
+		base = m.drawToasts(base, m.width, m.height)
 	}
 	if overlay != "" {
 		dy := m.overlayAnim.offset()
@@ -751,8 +942,11 @@ func (m Model) view() (string, hitTargets) {
 // renderPromptOverlay renders the inline prompt dialog.
 func (m Model) renderPromptOverlay() string {
 	c := theme.Current().Colors
-	title := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).
-		Render("Send to: " + m.promptTarget.Name)
+	label := "Send to: " + m.promptTarget.Name
+	if m.promptBroadcast {
+		label = fmt.Sprintf("Send to all %d agents on screen", len(m.broadcastPanes()))
+	}
+	title := lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render(label)
 	hint := lipgloss.NewStyle().Foreground(c.Muted).
 		Render("Enter send  Esc cancel")
 	content := title + "\n\n" + m.promptInput.View() + "\n\n" + hint
@@ -823,6 +1017,20 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Prompt mode intercepts keys
 	if m.promptMode {
 		return m.handlePromptKey(msg)
+	}
+
+	// The palette and the review panel are dialogs: each has the keyboard
+	// until it closes.
+	if m.palette.open {
+		return m.handlePaletteKey(msg)
+	}
+	if m.review.open {
+		return m.handleReviewKey(msg)
+	}
+
+	// Focus mode hands the keyboard to the agent, bar a few chords of its own.
+	if m.focus.on {
+		return m.handleFocusKey(msg)
 	}
 
 	switch key {
@@ -993,6 +1201,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyInlinePrompt:
 		if s, ok := m.selectedSession(); ok {
 			m.promptMode = true
+			m.promptBroadcast = false
 			m.promptTarget = s
 			m.promptInput.SetValue("")
 			m.promptInput.Focus()
@@ -1008,6 +1217,15 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openNote()
 	case keyNextAttention:
 		return m.jumpToNextAttention()
+	case keyJumpTmux:
+		return m.jumpToTmux()
+	case keyReview:
+		if s, ok := m.selectedSession(); ok {
+			return m.openReview(s)
+		}
+		return m, nil
+	case keyPalette:
+		return m.openPalette()
 	case keyEditConfig:
 		return m, m.openConfigEditor()
 	default:
@@ -1133,11 +1351,15 @@ func (m Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case keyEnter:
 		text := strings.TrimSpace(m.promptInput.Value())
-		if text != "" {
-			sendPromptToPane(m.promptTarget, text)
-			log.Info("prompt sent to %s", m.promptTarget.Name)
-		}
 		m.promptMode = false
+		if text == "" {
+			return m, nil
+		}
+		if m.promptBroadcast && m.focus.on {
+			return m.broadcast(text)
+		}
+		sendPromptToPane(m.promptTarget, text)
+		log.Info("prompt sent to %s", m.promptTarget.Name)
 		return m, nil
 	default:
 		var cmd tea.Cmd
@@ -1148,16 +1370,16 @@ func (m Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // sendPromptToPane sends text to a session's tmux pane.
 func sendPromptToPane(s models.Session, text string) {
-	target := tmux.PaneTarget(s.SessionName, s.WindowIndex, s.PaneIndex)
+	target := agentTarget(s)
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
 		if i < len(lines)-1 {
 			// Intermediate lines: send text then Enter separately
-			tmux.RunTmux("send-keys", "-t", target, line, "")
+			tmux.RunTmux("send-keys", "-t", target, tmux.Arg(line), "")
 			tmux.RunTmux("send-keys", "-t", target, "Enter", "")
 		} else {
 			// Last line: send with Enter to execute
-			tmux.RunTmux("send-keys", "-t", target, line, "Enter")
+			tmux.RunTmux("send-keys", "-t", target, tmux.Arg(line), "Enter")
 		}
 	}
 }
@@ -1232,8 +1454,26 @@ func doScan(statesDir string) tea.Cmd {
 	}
 }
 
-func doPreviewTick() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return tickPreviewMsg{} })
+// Preview refresh bounds: fast while the previewed pane changes, backing off
+// to previewSlowPoll while it does not.
+const (
+	previewFastPoll = 200 * time.Millisecond
+	gridPreviewPoll = 500 * time.Millisecond
+	previewSlowPoll = 1500 * time.Millisecond
+)
+
+// restartPreview retires the running preview loop and starts a fresh one at
+// the fast rate.
+func (m *Model) restartPreview() tea.Cmd {
+	m.previewSeq++
+	m.previewDelay = previewFastPoll
+	return m.previewTick(previewFastPoll)
+}
+
+// previewTick schedules the preview loop's next refresh.
+func (m Model) previewTick(d time.Duration) tea.Cmd {
+	seq := m.previewSeq
+	return tea.Tick(d, func(time.Time) tea.Msg { return tickPreviewMsg{seq: seq} })
 }
 
 func (m Model) doPreview() tea.Cmd {
@@ -1298,6 +1538,7 @@ func (m *Model) countSaved() int {
 // --- Filtering & sorting ---
 
 func (m *Model) applyFilter() {
+	m.filterGen++
 	// Remember which session the cursor points at so we can restore the
 	// selection after rebuilding the filtered list. Without this, a background
 	// scan (every 2s) re-sorts and the cursor index silently slides onto a
@@ -1501,9 +1742,43 @@ func (m Model) renderStats(live, waiting, running, saved int) string {
 	return " " + strings.Join(parts, sep)
 }
 
+// sidebarStats is renderStats for focus mode's narrow sidebar, where the full
+// sentence wraps onto a second row. Counts become dots in the status colours —
+// the same dots the rows below carry — so they read without a legend.
+func sidebarStats(live, waiting, running, width int) string {
+	c := theme.Current().Colors
+	noun := "agents"
+	if live == 1 {
+		noun = "agent"
+	}
+	left := lipgloss.NewStyle().Foreground(c.Foreground).Render(fmt.Sprintf("%d %s", live, noun))
+	var right []string
+	if waiting > 0 {
+		right = append(right, lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(models.StatusWaitingInput))).
+			Render(fmt.Sprintf("● %d", waiting)))
+	}
+	if running > 0 {
+		right = append(right, lipgloss.NewStyle().Foreground(lipgloss.Color(models.StatusColor(models.StatusRunning))).
+			Render(fmt.Sprintf("● %d", running)))
+	}
+	r := strings.Join(right, "  ")
+	gap := width - 1 - lipgloss.Width(left) - lipgloss.Width(r) - rowGutter
+	if gap < 1 {
+		return " " + left
+	}
+	return " " + left + strings.Repeat(" ", gap) + r
+}
+
 // viewLeft renders the session list panel and reports which frame row each
 // session was drawn on, for mouse hit-testing.
 func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
+	return m.viewList(outerWidth, outerHeight, false)
+}
+
+// viewList renders the session list. As focus mode's sidebar it drops the search
+// box and takes the quiet border: keystrokes land in the terminal beside it, and
+// the gradient border belongs to wherever they land.
+func (m Model) viewList(outerWidth, outerHeight int, sidebar bool) (string, map[int]int) {
 	innerWidth := outerWidth - 4
 	if innerWidth < 10 {
 		innerWidth = 10
@@ -1536,6 +1811,9 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	} else {
 		m.searchInput.Prompt = " > "
 	}
+	// Without a width the input shows only the first character of its
+	// placeholder — a lone "s" that read as a query nobody had typed.
+	m.searchInput.SetWidth(max(innerWidth-lipgloss.Width(m.searchInput.Prompt)-1, 1))
 
 	// The header is wrapped here rather than left to the panel style to wrap on
 	// its own, so its height — and therefore both the list's height and its
@@ -1545,11 +1823,15 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	// header, but the stats line wraps to two or three lines on a narrow panel,
 	// which pushed the last rows down through the bottom border.
 	wrap := lipgloss.NewStyle().Width(innerWidth)
-	header := []string{
-		wrap.Render(m.renderStats(live, waiting, running, saved)),
-		"",
-		wrap.Render(m.statusLine()),
-		"",
+	stats := m.renderStats(live, waiting, running, saved)
+	if sidebar {
+		stats = sidebarStats(live, waiting, running, innerWidth)
+	}
+	header := []string{wrap.Render(stats), ""}
+	if !sidebar {
+		header = append(header, wrap.Render(m.statusLine()), "")
+	} else if msg := m.statusMessage(); msg != "" {
+		header = append(header, wrap.Render(msg), "")
 	}
 	headerHeight := 0
 	for _, line := range header {
@@ -1566,6 +1848,7 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 		listHeight = 1
 	}
 
+	m.compactRows = sidebar
 	list, rowAt := m.renderListView(innerWidth, listHeight)
 
 	// Frame row of the list's first line: top border, top padding, then header.
@@ -1580,7 +1863,11 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 	// The list is where keystrokes land, so it uses the gradient-bordered
 	// primary panel. Other panels (preview, details, empty states) stay
 	// on the quieter Border color.
-	return fitBox(primaryPanelStyle(), outerWidth, outerHeight).
+	style := primaryPanelStyle()
+	if sidebar {
+		style = panelStyle()
+	}
+	return fitBox(style, outerWidth, outerHeight).
 		Render(theme.OnPlane(body, surfaceBg())), sessionAt
 }
 
@@ -1590,7 +1877,10 @@ func (m Model) viewLeft(outerWidth, outerHeight int) (string, map[int]int) {
 // computed exactly once, by the code that draws it.
 func (m Model) renderListView(width, height int) (string, map[int]int) {
 	if len(m.filtered) == 0 {
-		return mutedStyle().Render("  No sessions found"), nil
+		if q := m.query(); q != "" {
+			return mutedStyle().Render(fmt.Sprintf("  Nothing matches %q", q)), nil
+		}
+		return mutedStyle().Render("  No agents yet"), nil
 	}
 
 	// Rows carry group headers alongside sessions, so scrolling works in row
@@ -1681,6 +1971,12 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		// The branch keeps the right-hand column; the compact agent badge is part
 		// of the left cluster so both remain visible on ordinary pane widths.
 		branch := branchFor(row.Label, s.Details.Worktree, s.Details.GitBranch)
+		// The sidebar is too narrow to afford a branch column: it would truncate
+		// the names, which are what the sidebar is for, and the focused agent's
+		// branch is already in the terminal's title.
+		if m.compactRows {
+			branch = ""
+		}
 
 		// Columns the row spends on anything that is not text: leading space,
 		// the dot, the space after it, the tree prefix, agent badge, star, and the
@@ -1721,7 +2017,13 @@ func (m Model) renderListView(width, height int) (string, map[int]int) {
 		// Every segment already carries rowBg, so the row is assembled by plain
 		// concatenation and padded once. onPlane re-establishes the tint after the
 		// resets the segments leave behind.
-		line := " " + dot + " " + prefixStyled + agentStyled + nameStyled +
+		// With several tiles open, the agents on screen carry a thin accent bar
+		// in the gutter, so the sidebar also says which ones are tiled.
+		gutter := " "
+		if m.focus.on && m.focus.n > 1 && m.focus.onScreen(sessionKey(s)) {
+			gutter = bg.Foreground(c.Accent).Render("▎")
+		}
+		line := gutter + dot + " " + prefixStyled + agentStyled + nameStyled +
 			strings.Repeat(" ", gap) + starStyled + branchStyled +
 			strings.Repeat(" ", rowGutter)
 		lines = append(lines, bg.Width(width).Render(theme.OnPlane(line, rowBg)))
@@ -1760,7 +2062,11 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 	if row.Count == 1 {
 		noun = "session"
 	}
-	count := mutedStyle().Render(fmt.Sprintf("%d %s", row.Count, noun))
+	label := fmt.Sprintf("%d %s", row.Count, noun)
+	if m.compactRows {
+		label = fmt.Sprint(row.Count)
+	}
+	count := mutedStyle().Render(label)
 	fixed := 1 + 1 + lipgloss.Width(count) + rowGutter
 	maxName := width - fixed
 	if maxName < minNameWidth {
@@ -1788,7 +2094,7 @@ func (m Model) renderGroupHeader(row listRow, width int) string {
 func (m Model) viewRight(outerWidth, outerHeight int) string {
 	if len(m.filtered) == 0 {
 		return fitBox(panelStyle(), outerWidth, outerHeight).
-			Render(theme.OnPlane(mutedStyle().Render("No session selected"), surfaceBg()))
+			Render(theme.OnPlane(m.welcome(outerWidth-4), surfaceBg()))
 	}
 
 	innerWidth := outerWidth - 4
@@ -2238,4 +2544,33 @@ func formatTimeAgo(ts string) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+// welcome is the detail panel when there is nothing to show — for most people,
+// the first thing nagare ever shows them. It says what to do next rather than
+// that there is nothing here.
+func (m Model) welcome(width int) string {
+	c := theme.Current().Colors
+	if len(m.sessions) > 0 {
+		return mutedStyle().Render("No session matches the search. Esc clears it.")
+	}
+	key := lipgloss.NewStyle().Foreground(c.Accent).Bold(true).Width(18)
+	desc := lipgloss.NewStyle().Foreground(c.Foreground)
+	row := func(k, d string) string { return key.Render(k) + desc.Render(d) }
+	lines := []string{
+		lipgloss.NewStyle().Foreground(c.Primary).Bold(true).Render("流れ nagare") +
+			mutedStyle().Render("  every coding agent, one screen"),
+		"",
+		desc.Render("No agents are running yet."),
+		"",
+		row("Ctrl+n", "start an agent in a project"),
+		row("Ctrl+r", "quick prototype in a scratch directory"),
+		row("Ctrl+k", "command palette"),
+		"",
+		mutedStyle().Render("From your shell:"),
+		row("nagare-go demo", "try nagare with simulated agents"),
+		row("nagare-go setup", "connect Claude Code, Codex, OpenCode, Gemini…"),
+		row("nagare-go doctor", "check that everything is connected"),
+	}
+	return lipgloss.NewStyle().Width(width).Padding(1, 2).Render(strings.Join(lines, "\n"))
 }

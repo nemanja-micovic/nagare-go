@@ -100,3 +100,11 @@ func clearsBackground(sequence string) bool {
 	}
 	return cleared
 }
+
+// BackgroundSequence returns the SGR sequence that sets bg, for callers that
+// assemble lines by hand and reassert the plane themselves.
+func BackgroundSequence(bg color.Color) string { return backgroundSequence(bg) }
+
+// ReassertBackground re-applies set after every SGR sequence in line that
+// clears the background.
+func ReassertBackground(line, set string) string { return reassertBackground(line, set) }

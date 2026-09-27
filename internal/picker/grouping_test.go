@@ -476,7 +476,11 @@ func TestBranchFor(t *testing.T) {
 		{"cosmiclab-frontend/splat-zoomin", "splat-zoomin", "worktree-splat-zoomin", ""},
 		{"cosmiclab-backend", "", "feat/splat_loader", "feat/splat_loader"},
 		{"cosmo-ai", "", "fix/slack-approval-observability", "fix/slack-approval-observability"},
-		{"nagare", "", "main", "main"},
+		// The default branch is what a row without one is taken to be on, so
+		// naming it only costs the label columns.
+		{"nagare", "", "main", ""},
+		{"legacy", "", "master", ""},
+		{"nagare", "", "maintenance", "maintenance"},
 		// A worktree on a branch of its own name still says something.
 		{"repo/wt", "wt", "feat/real-branch", "feat/real-branch"},
 	}

@@ -113,3 +113,32 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Errorf("theme = %q, want default %q", cfg.Appearance.Theme, "tokyonight")
 	}
 }
+
+// TestLoadPickerToggles covers the picker keys that used to be dropped by the
+// merge — setting mouse or animations to false had no effect at all.
+func TestLoadPickerToggles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "[picker]\nmouse = false\nanimations = false\nenter_action = \"jump\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Picker.Mouse || cfg.Picker.Animations {
+		t.Errorf("mouse=%v animations=%v, want both false", cfg.Picker.Mouse, cfg.Picker.Animations)
+	}
+	if cfg.Picker.EnterAction != EnterJump {
+		t.Errorf("enter_action = %q, want %q", cfg.Picker.EnterAction, EnterJump)
+	}
+	if !cfg.Picker.ShowHelpBar {
+		t.Error("show_help_bar should keep its default when unset")
+	}
+}
+
+func TestEnterActionDefaultsToFocus(t *testing.T) {
+	if got := Default().Picker.EnterAction; got != EnterFocus {
+		t.Errorf("default enter_action = %q, want %q", got, EnterFocus)
+	}
+}

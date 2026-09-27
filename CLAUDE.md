@@ -19,6 +19,8 @@ go vet ./...               # lint
 ```bash
 nagare-go                  # launch picker (default)
 nagare-go pick             # launch picker
+nagare-go demo [--speed N] # try nagare with simulated agents on a private tmux server
+nagare-go doctor           # check tmux, git, agents' hooks/MCP and status events, with fixes
 nagare-go hook-state       # handle agent hook/plugin/extension events (stdin JSON)
 nagare-go setup            # install status reporting + MCP server + slash commands
 nagare-go notifs           # notification center TUI
@@ -35,8 +37,8 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 
 - `internal/models` — Session, SessionStatus, AgentType (claude, codex, opencode, gemini, crush, pi)
 - `internal/config` — TOML config loading + saving
-- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping)
-- `internal/git` — resolves repository/worktree identity, reviews managed diffs, and pushes only an explicitly recorded clean branch
+- `internal/tmux` — scanner (list-panes + /proc descendant walk), per-pane paths and worktree resolution, status detection (pane scraping), pane snapshots + window fitting + the serial key queue behind focus mode
+- `internal/git` — resolves repository/worktree identity, lists uncommitted changes for the review panel, reviews managed diffs, and pushes only an explicitly recorded clean branch
 - `internal/state` — state files + session registry + session notes
 - `internal/hooks` — hook handler (stdin JSON → state files → notifications)
 - `internal/notifications` — delivery (toast/bell/os/popup) + persistent store
@@ -53,6 +55,9 @@ Single binary with cobra subcommands. All code in `internal/` packages.
 - `internal/bin` — shared binary finder
 - `internal/fsutil` — atomic file writes
 - `internal/log` — file logger (~/.local/share/nagare/nagare-go.log)
+- `internal/paths` — the data directory (`$NAGARE_DATA_DIR`, default ~/.local/share/nagare)
+- `internal/demo` — `nagare-go demo`: simulated agents, throwaway repos, private tmux server
+- `internal/doctor` — `nagare-go doctor`: checks the files `setup` writes, so the two cannot disagree
 
 ### Worktrees
 
@@ -306,7 +311,8 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | Key | Action |
 |-----|--------|
 | Type | Fuzzy search sessions |
-| Enter | Jump to selected session |
+| Enter | Open the agent in nagare (focus mode); `picker.enter_action = "jump"` restores switching to tmux |
+| F6 | Open the agent in tmux itself |
 | Esc | Quit |
 | ↑/↓ | Navigate |
 | Tab | Toggle list/grid view |
@@ -329,6 +335,20 @@ Nagare also installs a Codex Agent Skill at `~/.codex/skills/nagare/SKILL.md`.
 | F4 | Jump to the next session waiting on you |
 | F1 | Help overlay |
 
+Also in the list: `Ctrl+k` command palette, `Ctrl+d` review the selected agent's
+changes.
+
+Focus mode keys: everything goes to the agent except `Ctrl+]` (back to the list;
+`picker.focus_leave_key`), `Alt+↑/↓` (switch the tile's agent), `Alt+v` (split),
+`Alt+←/→` (move between tiles), `Alt+x` (close tile), `Alt+b` (broadcast a prompt
+to every agent tile — as one bracketed paste plus Enter each, never to shells), `F4` (next waiting), `Alt+s`
+(companion shell), `Alt+d` (review), `Alt+k` (palette), `Shift+PgUp/PgDn`
+(scrollback), `Alt+z` (zoom), `F1`, `F6` (open in tmux; outside tmux the attach
+returns to nagare on detach). A single
+click on a sidebar row switches focus — the list's select-then-activate guard
+exists because activating used to leave nagare, and switching focus leaves
+nothing.
+
 F4 walks the queue: forward from the cursor and wrapping, so repeated presses reach
 every waiting session once before repeating. Most-urgent-first would ping-pong
 between the same two. Only `waiting_input` counts — offering to jump to a running
@@ -344,6 +364,180 @@ dialogs (worktree removal, inline prompt) ignore clicks and want a deliberate an
 The footer shows only the keys valid for the current mode and selection, trimmed to
 one line — the full set is on F1. `hintsFor` lists hints in drop order, so whatever
 matters most for the selection survives on a narrow terminal.
+
+### Focus mode
+
+The picker used to end every interaction by handing the user to tmux. Focus mode
+(`focus.go`, `focusview.go`) keeps them in nagare instead: Enter draws the agent's
+live pane in place of the preview, forwards keystrokes to it, and keeps the list
+alongside as a sidebar. herdr was the reference point; the difference is that
+tmux stays the backend, so agents outlive nagare exactly as before and nagare no
+longer has to run inside tmux at all.
+
+How it works, and why each piece is the way it is:
+
+- **The pane is fitted, not cropped.** `tmux.FitWindow` resizes the agent's
+  window to exactly the panel (`focusGeometry` is the single source for both), so
+  the agent lays itself out for the space it is shown in. `ReleaseWindow` hands it
+  back — `resize-window -A` *then* unset `window-size`; the other order leaves it
+  pinned, because `-A` itself sets `manual`. A pane sharing its window is zoomed
+  first. Fitted windows carry `@nagare_focus` holding the owner's pid, and
+  `ReleaseStaleWindows` runs at startup, before the first scan, releasing only
+  windows whose owner is dead — so a crashed run cannot leave a window pinned, and
+  a second nagare running alongside keeps its tiles.
+- **Every tmux call goes through one queue** (`tmux.Queue`). Keystrokes must
+  arrive in order; a `tea.Cmd` per key would race, and running inline would stall
+  the UI per fork. Captures go through the same worker, so a capture always sees
+  every key sent before it, and replies are numbered so a late one cannot rewind
+  the screen. The number is taken in the same queue job as the captures, and a
+  stale reply from the current loop still reschedules — otherwise two polls racing
+  to the queue could end polling for good. Bursts of typed text coalesce into one `send-keys -l`.
+- **tmux drops a trailing `;` from any argument** — it reads it as a command
+  separator. `tmux.Arg` escapes it; every argument carrying user text or a key
+  name must go through it. This lost the `;` from `git status; pwd` typed into the
+  companion shell before it was fixed.
+- **tmux encodes keys, not nagare.** `translateKey` maps a keypress to a tmux key
+  name (`C-c`, `M-Enter`, `S-Up`) and lets send-keys produce the bytes, because
+  tmux knows what the program in the pane asked for (application cursor keys,
+  extended keys). Shift+Enter becomes `M-Enter`, the newline binding that
+  survives any terminal. Pastes go through a buffer with `paste-buffer -p`, so a
+  multi-line paste lands as one bracketed paste.
+- **Captures are event-driven** (`watch.go`, `tmux.Watcher`). A tmux control-mode
+  client (`tmux -C attach -f ignore-size`) per session with a tiled pane reports
+  `%output %<pane>` the moment a pane prints; that triggers a capture — the active
+  tile at most every 33ms, background tiles at their 300ms cadence. The capture is
+  unchanged (tmux renders, nagare needs no terminal emulator); only *when* changed.
+  Echo latency went from a 33ms median (polling) to **9ms**. `ignore-size` keeps
+  the client out of window sizing; it only listens and exits when its stdin
+  closes, so it cannot outlive nagare. While events are healthy, polling is a 1s
+  safety net (a resize reflow prints nothing); without control mode the old
+  adaptive polling runs unchanged — ~30fps while the screen changes, 4fps when
+  still, 12ms after a keystroke.
+- **Nagare keeps few keys.** Only chords an agent has no use for: the leave key
+  (`Ctrl+]`, configurable as `picker.focus_leave_key` because it is awkward on
+  many non-US layouts), `Alt+↑/↓`, `Alt+s`, `Alt+z`, `Shift+PgUp/PgDn`, F1, F4, F6.
+  **Esc goes to the agent** — it interrupts Claude — so the focus footer never
+  offers "Esc Quit"; `TestFocusFooterNeverOffersEscAsQuit` holds that.
+- **The companion shell** (`Alt+s`, `tmux.CompanionShell`) is a window in the
+  agent's session, in the agent's directory, tagged `@nagare_shell` with the
+  agent's pane id so it is reused rather than multiplied. The frame title and
+  sidebar keep describing the agent: its state is what the user is watching
+  while they work in the shell. A shell that exits hands back to its agent.
+- **New sessions and new worktrees open in focus mode.** The forms take
+  `Stay()` and return the session through `Created()` instead of switching the
+  terminal away; `FocusWhenReady` focuses it once a scan finds its agent.
+- **Scrollback is nagare's**, not copy mode: `Shift+PgUp` or the wheel re-captures
+  with `-S/-E` offsets into history. Any typed key returns to the live screen.
+
+The terminal panel is drawn by hand rather than with a lipgloss border, and the
+sidebar render is cached (`cachedSidebar`, keyed on everything `viewList` reads).
+Both for the same reason: the panel repaints at the capture rate, and `fitBox`
+measuring a whole panel was most of a frame. Focus frame: 4.3ms → 0.68ms
+(`BenchmarkViewFocus30`), panel alone 0.5ms (`BenchmarkTermPanel`).
+`TestFocusSidebarCacheIsInvisible` checks the cache is byte-identical to a fresh
+render and invalidates on every input; the layout tests cover the hand-drawn panel
+the way `fitBox` covers the rest.
+
+Tests never reach tmux: `NewForTest` injects a no-op `tmux.Runner`, and the focus
+tests record what would have been sent. A test that could resize a real window on
+the developer's machine is not acceptable.
+
+Rejected: ACP (Agent Client Protocol) as the way to talk to agents. It would give
+structured events instead of a screen, but only for agents nagare launches through
+it — not the tmux sessions already running — support varies per agent (pi has
+none), and the agent's own TUI is lost. Driving the real terminal works for every
+agent today; ACP may still suit a narrower job later, like structured permission
+prompts.
+
+### Split view
+
+Focus mode holds up to `maxTiles` (4) panes as tiles. `Alt+v` adds the next agent
+that is not on screen; each tile's window is fitted to its own rectangle.
+
+- **Sessions are keyed by pane id** (`sessionKey`), falling back to
+  `session:window.pane` only when there is none. The positional key named a
+  different agent after a window renumber, so a tile would review, shell into and
+  jump to the wrong one.
+- **Tiles close at their own index** (`closeTileAt`): an agent exiting in a
+  background tile once moved the keyboard onto another agent mid-sentence.
+- **Tiles are a fixed array**, `[maxTiles]paneView` plus a count, not a slice. The
+  Model is copied by value on every update, and a slice's shared backing array let
+  one copy's edits leak into another.
+- **Side by side only while each tile keeps `sideBySideTermW` (60) columns**;
+  below that tiles stack. A coding agent squeezed narrower wraps nearly every
+  line, and the first recording of the demo showed exactly that.
+- **Background tiles poll every `focusBackgroundPoll` (300ms)**, the active one at
+  the adaptive rate. Four tiles at 30fps would be 120 tmux calls a second.
+- The active tile wears the gradient; background tiles take `Border` and a muted
+  title — but "needs you" stays loud in every tile, since that is what a background
+  tile is for. `geometryFor(n+1).fits()` refuses a split that would make tiles
+  unreadable, with a note saying how to make room.
+- A four-tile frame is 0.74ms (`BenchmarkViewFocusSplit4`).
+
+### Review panel
+
+`Alt+d` / `Ctrl+d` (`review.go`) lists `git.Changes` — uncommitted files with line
+counts against HEAD — beside git's own `--color=always` diff, preamble stripped.
+Loads run as commands with a generation counter so a slow diff for an old
+selection is dropped. Untracked directories are skipped: under `-uall` they are
+nested repositories, usually a worktree inside the repo. For the same reason
+`git.AddWorktree` adds `/.worktrees/` to the clone's `.git/info/exclude` — without
+it every nagare worktree showed up in the main checkout's `git status`.
+
+### Command palette
+
+`Ctrl+k` / `Alt+k` (`palette.go`) fuzzy-matches every action valid in the current
+mode plus every running agent. An action *is* its key binding: running it replays
+the keypress through `Update`, so the palette cannot drift from the keys.
+`TestFocusPaletteActionsNeverReachTheAgent` replays every focus-mode action and
+fails if any reaches the agent as a keystroke.
+
+### Toasts, layout restore, first run
+
+- **Toasts** (`toast.go`): in focus mode, the same two transitions that flash a
+  row (started waiting, finished) raise a toast for any agent without the
+  keyboard, drawn top-right with the compositor, above tiles and below dialogs.
+  Five seconds, at most three, pruned on the 10fps clock, which stays alive while
+  any are showing. None in the list: the flashing row is already where the eye is.
+- **Layout restore** (`layout.go`, `picker.restore_layout`): the tiles are saved
+  to `layout.json` whenever focus mode closes — leaving it with the leave key, or
+  quitting in it — and forgotten only when the last tile is closed with Alt+x.
+  Focus mode has no quit key (Esc belongs to the agent), so the first version's
+  "quitting from the list forgets it" forgot it every time. A saved tile matches
+  only the same pane *in the same session running the same agent* (tmux reuses
+  pane ids after a restart), is never opened twice, and the saved active index is
+  mapped to the opened tiles. Tests never touch the file: `NewForTest` disables
+  reading and writing.
+- **First run**: with no sessions the detail panel is a welcome that names
+  `Ctrl+n`, `Ctrl+r`, `Ctrl+k`, `nagare-go demo` and `nagare-go setup`, and an empty
+  search says what did not match — most people's first look at nagare was a
+  panel reading "No session selected".
+
+### Demo mode
+
+`nagare-go demo` (`internal/demo`) is how people try nagare, and how the README GIF
+is made. Simulated agents are the nagare binary started through symlinks named
+`claude`, `codex`, `opencode`, so the scanner detects them unmodified; `main`
+dispatches to `demo.RunAgent` before cobra when `NAGARE_DEMO` is set and argv[0] is
+an agent name. They write the same state files hooks write (note the hook
+vocabulary: running is `"working"` on disk), make real edits in real git repos,
+and block on permission prompts that read stdin.
+
+Isolation: `NAGARE_TMUX_SOCKET` routes every tmux call through `tmux.Command` to a
+private server, and `NAGARE_DATA_DIR` moves state, registry, log and messages to a
+temp dir. `TMUX` is unset, so the picker treats itself as outside tmux.
+
+Cleanup must survive any exit. `Close` kills the demo server **by explicit socket
+name** — a `kill-server` falling through to the default socket would take down the
+user's real sessions. SIGHUP runs cleanup. Agents poll their parent pid and exit
+when it is gone, so after a `kill -9` tmux runs out of sessions and stops the
+server itself; the next demo sweeps temp dirs whose recorded pid is dead.
+
+The GIF is regenerated by `scripts/demo-gif/make.sh` (pyte + headless Chromium +
+Pillow, no VHS needed) or `vhs docs/demo.tape`. pyte lacks REP and SU/SD, which
+Bubble Tea's renderer emits; `record.py` adds them, or rows vanish from frames and
+look like rendering bugs that are not there. Send key chords (`ESC v`) in one
+write: split across writes, `Alt+v` arrives as Esc then `v`.
 
 ### Layout: measure, never assume
 
@@ -554,6 +748,21 @@ Overlay entry is started centrally, by `Update` noticing that no overlay was ope
 before a keypress and one is open after, so a new overlay cannot forget to animate.
 `overlayRect` and `placeOverlay` both take the animated offset, so a click lands on
 the dialog where it currently appears rather than where it will rest.
+
+### Preview loop
+
+Exactly one preview loop runs, owned by `previewSeq`. Navigation fetches a
+preview directly (`doPreview` → `PreviewUpdatedMsg`) and schedules nothing; it
+used to schedule a refresh of its own, so **every cursor move added a polling loop
+that never ended** — after 40 moves over four idle agents the picker burned 131%
+of a core. Moving the cursor now retires the loop and starts a fresh one
+(`restartPreview`). The loop backs off while the preview is unchanged (200ms →
+1.5s; grid 500ms → 1.5s), since every refresh is a full frame; the same scenario
+now costs 2.6%. `NAGARE_CPUPROFILE=path` writes a CPU profile of a run — that is
+how this was found.
+
+The scanner reuses each directory's git facts for `repoTTL` (6s) instead of
+forking `git rev-parse` per agent every two-second scan.
 
 ### Help overlay
 
